@@ -1,3 +1,0 @@
-i,rail_cm,pan_deg,tilt_deg,rail_counts,pan_counts,tilt_counts,rail_dir,pan_dir,tilt_dir,rail_secs,pan_secs,tilt_secs,spray
-0,1.0,-21.8,55.3,120,-262,664,0,0,0,0.0,0.0,0.0,1
-1,1.0,-18.1,50.4,120,-217,605,0,1,-1,0.0,0.0822,0.1089,1
