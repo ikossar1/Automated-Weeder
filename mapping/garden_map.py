@@ -219,7 +219,13 @@ class GardenMap:
 
         return self.counts()
 
-    def keep_categories(self, wanted):
+    # Delaney's BioCLIP pipeline returns one of these. Anything it is not
+    # confident about is treated as a crop, because the two mistakes are
+    # not equal: leaving a weed costs a weed, mulching a basil costs the
+    # plant. When unsure, protect it.
+    CROP_LIKE = ("crop", "possible crop", "uncertain", "unknown")
+
+    def keep_categories(self, wanted, unknown_is_crop=True):
         """
         Drop every plant whose category is not in `wanted`.
 
@@ -234,11 +240,22 @@ class GardenMap:
         Returns (kept, dropped_wrong_category, dropped_no_category).
         """
         wanted = {str(w).strip() for w in wanted if str(w).strip()}
+
+        # Asking for "crop" means every category that might be one.
+        if unknown_is_crop and "crop" in wanted:
+            wanted |= set(self.CROP_LIKE)
+
         keep, wrong, blank = [], 0, 0
 
         for p in self.plants:
             if not p.category:
+                # No category at all is different from an uncertain one -
+                # it means the classifier never saw this plant. Keep it if
+                # unknowns count as crops, but count it separately so a
+                # half-filled CSV is still visible.
                 blank += 1
+                if unknown_is_crop:
+                    keep.append(p)
             elif p.category in wanted:
                 keep.append(p)
             else:
@@ -274,7 +291,7 @@ class GardenMap:
 
     # -- the grid -----------------------------------------------------------
 
-    def grid(self, cols=6, rows=4, bed=None):
+    def grid(self, cols=6, rows=4, bed=None, snap_cm=4.0):
         """
         Divide the bed into cols x rows cells and say what is in each.
 
@@ -314,8 +331,17 @@ class GardenMap:
                 cx0, cx1 = x0 + c * w, x0 + (c + 1) * w
                 cy0, cy1 = y0 + r * h, y0 + (r + 1) * h
 
+                # Edge cells reach a little past the plot. A plant 1 cm
+                # outside a measured bed is a corner-click that landed a
+                # few pixels high, not a plant in the next bed - and
+                # dropping it silently loses a real crop from the map.
+                lo_x = cx0 - snap_cm if c == 0 else cx0
+                hi_x = cx1 + snap_cm if c == cols - 1 else cx1
+                lo_y = cy0 - snap_cm if r == 0 else cy0
+                hi_y = cy1 + snap_cm if r == rows - 1 else cy1
+
                 inside = [p for p in self.plants
-                          if cx0 <= p.x_cm < cx1 and cy0 <= p.y_cm < cy1]
+                          if lo_x <= p.x_cm < hi_x and lo_y <= p.y_cm < hi_y]
                 # The far edges are closed, so plants exactly on the boundary
                 # are not silently dropped off the grid.
                 if c == cols - 1:
@@ -375,7 +401,13 @@ class GardenMap:
                          f"--rows to split crop from weed")
         if placed < len(self.plants):
             lines.append(f"WARNING         : {len(self.plants) - placed} plant(s) "
-                         f"fell outside the grid - widen `bed`")
+                         f"fell outside the grid")
+            lines.append(f"                  Either the plot really ends "
+                         f"before them, or the near")
+            lines.append(f"                  corners were clicked a little "
+                         f"high. Check the corner")
+            lines.append(f"                  overlay - their bases must be "
+                         f"inside the green outline.")
         return "\n".join(lines)
 
     def render_grid(self, path="garden_grid.png", cols=6, rows=4, bed=None,

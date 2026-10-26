@@ -42,6 +42,9 @@ import detect
 import geometry
 from garden_map import GardenMap
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+import safestop
+
 
 def read_poses(path):
     out = {}
@@ -144,6 +147,22 @@ def main(argv=None):
     ap.add_argument("--edge-margin", type=float, default=5.0,
                     help="how far outside the plot a plant may sit and still "
                          "count, cm (default: 5)")
+    ap.add_argument("--bioclip", action="store_true",
+                    help="name every plant with BioCLIP and decide crop vs "
+                         "weed in the same run. YOLOE finds them, BioCLIP "
+                         "says what they are. Needs open_clip_torch")
+    ap.add_argument("--candidates", default=None,
+                    help="which crops are planted in this bed, comma "
+                         "separated, e.g. \"Ocimum basilicum\". Narrows "
+                         "what BioCLIP chooses between. Weeds always stay "
+                         "in the list. Left out, all crops are considered")
+    ap.add_argument("--bioclip-margin", type=float, default=0.15,
+                    help="context kept round each crop before classifying")
+    ap.add_argument("--strict-crop", action="store_true",
+                    help="drop plants the classifier was unsure about. By "
+                         "default 'uncertain', 'possible crop' and anything "
+                         "unlabelled count as crops and stay on the map - "
+                         "leaving a weed is cheaper than mulching a basil")
     ap.add_argument("--only", default=None, metavar="CATEGORIES",
                     help="show only these categories on the map, comma "
                          "separated, e.g. --only A. Categories come from the "
@@ -256,6 +275,7 @@ def main(argv=None):
                                    conf=args.conf, imgsz=args.imgsz)
 
     gmap = GardenMap(merge_radius_cm=args.merge)
+    classifier = None
     best_shot = {}          # plant_id -> (Plant, Detection, source image)
     print(f"\nScanning {len(files)} image(s):")
 
@@ -268,6 +288,33 @@ def main(argv=None):
                                pan_deg=row.get("pan_deg"))
 
         found = det.detect(str(f))
+
+        # Name them straight away, so category rides along with the
+        # detection and the map can be filtered in the same run.
+        if found and args.bioclip:
+            if classifier is None:
+                import bioclip
+                keep = ([c.strip() for c in args.candidates.split(",")]
+                        if args.candidates else None)
+                cands = bioclip.build_candidates(keep)
+                crops = [n for n, c in cands if c in ("crop", "ambiguous")]
+                print(f"    BioCLIP choosing between {len(cands)} names "
+                      f"({len(crops)} crop, rest weeds)")
+                if keep:
+                    print(f"    crops: {', '.join(crops)}")
+                print("    loading (first run downloads ~1 GB)...")
+                classifier = bioclip.Classifier(candidates=cands)
+                print("    done")
+            from PIL import Image as _Image
+            photo = _Image.open(f).convert("RGB")
+            for d in found:
+                import bioclip as _bc
+                res = classifier.classify(_bc.crop_image(photo, d.box,
+                                                         args.bioclip_margin))
+                d.label = res["species"]
+                d.category = res["category"]
+                d.species_conf = res["confidence"]
+
         if not found:
             print(f"  {f.name:28s} nothing found")
             gmap.frames += 1
@@ -360,7 +407,8 @@ def main(argv=None):
 
     elif args.only:
         wanted = [c.strip() for c in args.only.split(",") if c.strip()]
-        kept, wrong, blank = gmap.keep_categories(wanted)
+        kept, wrong, blank = gmap.keep_categories(
+            wanted, unknown_is_crop=not args.strict_crop)
         print("")
         print(f"Filter          : showing category {wanted} only")
         print(f"                  kept {kept}, hid {wrong} in other "
@@ -457,4 +505,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    with safestop.guard("the scan"):
+        main()

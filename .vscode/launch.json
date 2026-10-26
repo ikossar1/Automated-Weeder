@@ -14,28 +14,39 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // START HERE for a photo you have not mapped before. Asks which one,
+      // the plot size and the corners, rather than reusing whatever was
+      // hard-coded in the configs below.
+      "name": "M0. ANY photo - asks which  (start here)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/new_bed.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal"
+    },
+    {
       // ---------------- MAPPING ----------------
       // Click the four corners of the plot. Near-left, near-right,
       // far-right, far-left. Prints eight numbers to paste below.
-      "name": "M1. Pick corners  (Delaney's bed)",
+      "name": "M1. Pick corners - FIXED to basil_1.jpg",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/mapping/pick_corners.py",
       "cwd": "${workspaceFolder}/mapping",
       "console": "integratedTerminal",
-      "args": ["delaney_output/6crops.jpg", "200", "300"]
+      "args": ["photos/basil_1.jpg", "200", "300"]
     },
     {
       // Reads Delaney's drawn boxes rather than running our own detector.
       // Writes maps/delaney_bed/ and the handoff bundle.
-      "name": "M2. Map Delaney's bed",
+      "name": "M2. Map - FIXED to basil_1.jpg",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/mapping/scan.py",
       "cwd": "${workspaceFolder}/mapping",
       "console": "integratedTerminal",
       "args": [
-        "delaney_output/6crops.jpg",
+        "photos/basil_1.jpg",
         "--annotations",
         "--annotation-label", "basil",
         "--corners", "7", "2543", "2012", "2541", "1721", "1303", "302", "1275",
@@ -50,14 +61,14 @@
       // Same bed, but only the plants Delaney marked category A.
       // Harmless to run before her CSV comes back - it says so and
       // shows everything.
-      "name": "M3. Map category A only",
+      "name": "M3. Map category A - FIXED to basil_1.jpg",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/mapping/scan.py",
       "cwd": "${workspaceFolder}/mapping",
       "console": "integratedTerminal",
       "args": [
-        "delaney_output/6crops.jpg",
+        "photos/basil_1.jpg",
         "--annotations", "--annotation-label", "basil",
         "--corners", "7", "2543", "2012", "2541", "1721", "1303", "302", "1275",
         "--plot", "200", "300",
@@ -68,13 +79,13 @@
       ]
     },
     {
-      "name": "M4. Detector only  (check it sees the plants)",
+      "name": "M4. Detector check - FIXED to basil_1.jpg",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/mapping/annotations.py",
       "cwd": "${workspaceFolder}/mapping",
       "console": "integratedTerminal",
-      "args": ["delaney_output/6crops.jpg"]
+      "args": ["photos/basil_1.jpg"]
     },
     {
       "name": "M5. Calibrate the lens  (needs calib_photos/)",

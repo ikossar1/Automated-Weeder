@@ -10,3 +10,5 @@ opencv-python>=4.10.0   # camera calibration, lens distortion
 numpy>=1.26.0
 matplotlib>=3.8.0       # the map and grid plots
 pillow>=10.0.0          # image sizes
+open_clip_torch>=2.24.0  # BioCLIP 2 - names plants, decides crop vs weed
+torch>=2.0.0            # pulled in by ultralytics anyway

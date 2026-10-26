@@ -174,6 +174,55 @@ off a plant.
 
 ---
 
+## Stopping a run
+
+### Stages 1&ndash;3 &mdash; calibration, mapping, spraying
+
+**`Ctrl + C`** in the terminal. Or press **`q`** to close the corner-picking
+or box-picking window.
+
+Nothing has moved. These stages only write files, so the worst case is a
+part-written output you can delete and redo. The scripts catch the interrupt
+and say what was finished:
+
+```
+STOPPED  -  spray planning was interrupted
+
+Finished before the stop:
+  plans/bed1/plan.json
+
+Nothing has moved - these stages only produce files.
+```
+
+The command file is written **atomically** &mdash; to a temporary name, then
+renamed over the target. A rename either happens or it does not, so a `Ctrl + C`
+mid-write cannot leave a truncated CSV that still looks like a valid plan. A
+machine handed one of those would run half a plan and stop somewhere
+arbitrary, possibly with the valve open, and nothing in the file would say it
+was incomplete.
+
+### Stage 4 &mdash; the machine is moving
+
+**Shut the valve first. Then stop the motors.**
+
+That order is not negotiable. Stop the motors first and the valve keeps
+running onto one spot &mdash; a second of that is a heap of mulch on whatever
+is underneath. Shut it first and the worst case is a short line of mulch
+where the head was already travelling.
+
+This belongs in the Raspberry Pi code; nothing on the laptop can reach the
+hardware once the file has been handed over.
+
+### Build a physical stop
+
+`Ctrl + C` needs a laptop, a cable and a Python process all still working. A
+switch in the air line or the motor supply does not.
+
+Treat the software abort as the convenience and the switch as the actual
+safety case.
+
+---
+
 ## For the Raspberry Pi code
 
 **You do not need any of the above.** The vision half runs on a laptop and

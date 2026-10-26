@@ -20,6 +20,8 @@ Long term you would not do this by hand - you would put an ArUco marker at
 each corner and let OpenCV find them in every frame. This is the manual
 version of the same four points.
 """
+import json
+import pathlib
 import sys
 
 import cv2
@@ -109,7 +111,21 @@ def draw_quad(image_path, corners, out_path):
     return str(out_path)
 
 
-def report(pts, path, width, depth):
+def save_corners(pts, out_path):
+    """
+    Hand the corners back as a file.
+
+    When new_bed.py starts the picker it passes a path here, reads the file
+    and carries on. Nobody retypes eight numbers - which is not just tedious
+    but a real chance to transpose a digit and get a confident wrong map
+    with nothing to catch it.
+    """
+    flat = [round(float(v), 1) for p in pts for v in p]
+    pathlib.Path(out_path).write_text(json.dumps({"corners": flat}))
+    return flat
+
+
+def report(pts, path, width, depth, out_path=None):
     flat = " ".join(f"{v:.0f}" for p in pts for v in p)
 
     # Check the four points really do trace the edge in order.
@@ -144,6 +160,13 @@ def report(pts, path, width, depth):
            f'--prompts "plant,leaf" --conf 0.06 --imgsz 1600 '
            f'--merge 8 --grid 6x4 --out bedmap')
 
+    if out_path:
+        save_corners(pts, out_path)
+        print("Corners captured. Close this window (press q) and the scan")
+        print("will carry on by itself - nothing to copy.")
+        print("=" * 64)
+        return
+
     print("Paste this into the terminal:")
     print()
     print("  " + cmd)
@@ -156,11 +179,17 @@ def report(pts, path, width, depth):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit("python pick_corners.py <image> [width_cm] [depth_cm]")
+        sys.exit("python pick_corners.py <image> [width_cm] [depth_cm] "
+                 "[--out corners.json]")
 
-    path = sys.argv[1]
-    width = float(sys.argv[2]) if len(sys.argv) > 2 else 400.0
-    depth = float(sys.argv[3]) if len(sys.argv) > 3 else 300.0
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out_path = None
+    if "--out" in sys.argv:
+        out_path = sys.argv[sys.argv.index("--out") + 1]
+
+    path = args[0]
+    width = float(args[1]) if len(args) > 1 else 400.0
+    depth = float(args[2]) if len(args) > 2 else 300.0
 
     img = cv2.imread(path)
     if img is None:
@@ -203,7 +232,7 @@ def main():
             print(f"  {LABELS[len(picked) - 1]:14s} ({u:7.1f}, {v:7.1f})")
             redraw()
             if len(picked) == 4:
-                report(picked, path, width, depth)
+                report(picked, path, width, depth, out_path)
 
     sw, sh = _screen_size()
     print(f"{path}  ({w} x {h} px)")

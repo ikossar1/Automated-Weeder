@@ -40,6 +40,10 @@ import csv
 import json
 import math
 import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+import safestop
 
 
 class Axis:
@@ -170,6 +174,35 @@ DEFAULT_HEAD = Head(
 )
 
 
+def _write_atomic(out_csv, fields, rows):
+    """
+    Write the command file whole, or not at all.
+
+    Ctrl+C partway through a normal write leaves a truncated CSV that still
+    looks like a command file. A machine handed that would run the first
+    half of a plan and stop somewhere arbitrary, possibly with the valve
+    open, and nothing in the file would say it was incomplete.
+
+    So it is written beside the target and renamed over it. A rename is
+    atomic: either the old file is there or the new one is, never half of
+    either.
+    """
+    out = pathlib.Path(out_csv)
+    tmp = out.with_suffix(out.suffix + ".partial")
+
+    def _do():
+        with open(tmp, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=fields)
+            w.writeheader()
+            w.writerows(rows)
+        tmp.replace(out)
+
+    try:
+        safestop.ignore_sigint_during(_do)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def export_plan(plan_json, head=None, out_csv="motor_commands.csv",
                 relative=False):
     """
@@ -216,11 +249,7 @@ def export_plan(plan_json, head=None, out_csv="motor_commands.csv",
         else:
             rows.append({"i": i, **{k: c[k] for k in fields if k != "i"}})
 
-    with open(out_csv, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows)
-
+    _write_atomic(out_csv, fields, rows)
     return out_csv, len(rows), refused
 
 
@@ -342,20 +371,21 @@ def export_dc(plan_json, head=None, out_csv="dc_commands.csv"):
     head = head or DEFAULT_DC_HEAD
     plan = json.loads(pathlib.Path(plan_json).read_text())
 
-    fields = ["i", "rail_cm", "pan_deg", "tilt_deg",
+    fields = ["i", "box", "rail_cm", "pan_deg", "tilt_deg",
               "rail_counts", "pan_counts", "tilt_counts",
               "rail_dir", "pan_dir", "tilt_dir",
               "rail_secs", "pan_secs", "tilt_secs", "spray"]
 
     rows, refused, prev = [], 0, None
     for i, st in enumerate(plan["steps"]):
-        _stop, rail_cm, pan, tilt, _lx, _ly, spraying, _blk = st
+        box, rail_cm, pan, tilt, _lx, _ly, spraying, _blk = st
         c = head.command(rail_cm, pan, tilt, bool(spraying),
                          prev=prev or (rail_cm, pan, tilt))
         if not c["ok"]:
             refused += 1
             continue
-        rows.append({k: c.get(k, 0) for k in fields if k != "i"} | {"i": i})
+        rows.append({k: c.get(k, 0) for k in fields if k not in ("i", "box")}
+                    | {"i": i, "box": box})
         prev = (rail_cm, pan, tilt)
 
     with open(out_csv, "w", newline="", encoding="utf-8") as fh:
@@ -367,45 +397,46 @@ def export_dc(plan_json, head=None, out_csv="dc_commands.csv"):
 
 
 if __name__ == "__main__":
-    import sys
+    with safestop.guard("writing commands"):
+        import sys
 
-    head = DEFAULT_HEAD
-    print("Axes:")
-    for a in (head.rail, head.pan, head.tilt):
-        print(f"  {a}")
+        head = DEFAULT_HEAD
+        print("Axes:")
+        for a in (head.rail, head.pan, head.tilt):
+            print(f"  {a}")
 
-    print("\nResolution - the finest move each axis can make:")
-    for k, v in head.resolution().items():
-        print(f"  {k:22s} {v:.5f}")
+        print("\nResolution - the finest move each axis can make:")
+        for k, v in head.resolution().items():
+            print(f"  {k:22s} {v:.5f}")
 
-    print("\nA few commands:")
-    for rail, pan, tilt in [(0, 0, 45), (150.0, -30.0, 20.0),
-                            (300.0, 70.0, 80.0), (310.0, 0.0, 45.0)]:
-        c = head.command(rail, pan, tilt, spray=True)
-        if c["ok"]:
-            print(f"  rail {rail:6.1f}cm pan {pan:+6.1f} tilt {tilt:5.1f}"
-                  f"  ->  {c['rail_steps']:>9d} {c['pan_steps']:>7d} "
-                  f"{c['tilt_steps']:>6d}")
-        else:
-            print(f"  rail {rail:6.1f}cm pan {pan:+6.1f} tilt {tilt:5.1f}"
-                  f"  ->  REFUSED: {c['refused']}")
+        print("\nA few commands:")
+        for rail, pan, tilt in [(0, 0, 45), (150.0, -30.0, 20.0),
+                                (300.0, 70.0, 80.0), (310.0, 0.0, 45.0)]:
+            c = head.command(rail, pan, tilt, spray=True)
+            if c["ok"]:
+                print(f"  rail {rail:6.1f}cm pan {pan:+6.1f} tilt {tilt:5.1f}"
+                      f"  ->  {c['rail_steps']:>9d} {c['pan_steps']:>7d} "
+                      f"{c['tilt_steps']:>6d}")
+            else:
+                print(f"  rail {rail:6.1f}cm pan {pan:+6.1f} tilt {tilt:5.1f}"
+                      f"  ->  REFUSED: {c['refused']}")
 
-    print("\nRound trip - how much is lost rounding to whole steps:")
-    err = head.check_round_trip(123.456, -17.3, 42.7)
-    for k, v in err.items():
-        print(f"  {k:10s} {v:+.6f}")
+        print("\nRound trip - how much is lost rounding to whole steps:")
+        err = head.check_round_trip(123.456, -17.3, 42.7)
+        for k, v in err.items():
+            print(f"  {k:10s} {v:+.6f}")
 
-    if len(sys.argv) > 1:
-        if "--dc" in sys.argv:
-            out, n, bad = export_dc(sys.argv[1], DEFAULT_DC_HEAD)
-            print(f"\nWrote {out}: {n:,} commands for DC motors"
+        if len(sys.argv) > 1:
+            if "--dc" in sys.argv:
+                out, n, bad = export_dc(sys.argv[1], DEFAULT_DC_HEAD)
+                print(f"\nWrote {out}: {n:,} commands for DC motors"
+                      + (f", {bad:,} refused as out of travel" if bad else ""))
+                raise SystemExit(0)
+            rel = "--relative" in sys.argv
+            name = "motor_steps.csv" if rel else "motor_commands.csv"
+            out, n, bad = export_plan(sys.argv[1], head, name, relative=rel)
+            print(f"\nWrote {out}: {n:,} commands"
+                  + (" as step deltas" if rel else " as absolute positions")
                   + (f", {bad:,} refused as out of travel" if bad else ""))
-            raise SystemExit(0)
-        rel = "--relative" in sys.argv
-        name = "motor_steps.csv" if rel else "motor_commands.csv"
-        out, n, bad = export_plan(sys.argv[1], head, name, relative=rel)
-        print(f"\nWrote {out}: {n:,} commands"
-              + (" as step deltas" if rel else " as absolute positions")
-              + (f", {bad:,} refused as out of travel" if bad else ""))
 
 

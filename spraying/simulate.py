@@ -41,6 +41,9 @@ import numpy as np
 
 import aim as A
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+import safestop
+
 
 class MapPlant:
     """A plant read back from a map file."""
@@ -342,6 +345,14 @@ def main(argv=None):
     ap.add_argument("--offset-across", type=float, default=0.0,
                     help="nozzle offset sideways from the head, cm. The "
                          "camera-to-airbrush gap goes here")
+    # How far the rail sits outside the bed edge. This is the cheapest
+    # lever on coverage there is: every cm here is a cm taken straight off
+    # the far side of the bed, and unlike the throw it costs nothing to
+    # change. It was hardcoded at 8 cm, which quietly cost a third of a
+    # 30 cm bed.
+    ap.add_argument("--standoff", type=float, default=8.0,
+                    help="cm the rail sits outside the bed edge "
+                         "(default 8; 0 = flush with the edge)")
     ap.add_argument("--rail-length", type=float, default=None,
                     help="how long the rail actually is, cm. Without it the "
                          "rail is assumed to span the whole bed")
@@ -374,7 +385,8 @@ def main(argv=None):
               f"from the plants")
 
     rails = [limit_rail(r, args.rail_length, args.rail_start)
-             for r in passes_across(bed, args.side, 8.0, args.passes)]
+             for r in passes_across(bed, args.side, args.standoff,
+                                    args.passes)]
     rail = rails[0]
     out_dir = pathlib.Path(args.out or
                            (pathlib.Path(args.map_json).parent / "spray"))
@@ -391,30 +403,23 @@ def main(argv=None):
               f"rail covers {100*travel/along:.0f}% of it")
     print(f"Nozzle      : {args.height:.0f} cm up, throws {args.throw:.0f} cm, "
           f"pan +/-{args.pan_limit:.0f}")
-    # The reach that actually binds. People set --throw and assume that is
-    # the limit, but a nozzle can only aim so shallow: at tilt_min the ray
-    # lands at height / tan(tilt_min), and no amount of air pressure
-    # changes that. Whichever is smaller wins.
-    geom_reach = args.height / math.tan(math.radians(args.tilt_min))
-    need = max(bed[2] - bed[0], bed[3] - bed[1])         if rail["axis"] == "y" else max(bed[2] - bed[0], bed[3] - bed[1])
-    across = (bed[2] - bed[0]) if rail["axis"] == "y" else (bed[3] - bed[1])
-    across += 8.0      # the standoff
+    # The reach that actually binds. Two separate things cap it, and it is
+    # easy to watch only one.
+    #
+    # The throw is a SLANT distance - the nozzle is up in the air, so its
+    # height is spent on the way down and only sqrt(throw^2 - height^2) is
+    # left to cross the ground. A 30 cm throw from 14 cm up crosses 27 cm,
+    # not 30. Separately, a nozzle can only aim so shallow: at tilt_min the
+    # ray lands at height / tan(tilt_min). Whichever is smaller wins.
+    r = reach_into_bed(bed, rail, args.height, args.throw,
+                       args.tilt_min, args.tilt_max)
+    print(f"Reach       : {r['flat']:.1f} cm across the ground "
+          f"({r['limit']} limited), {r['into']:.1f} cm of it inside the bed")
+    print(f"              = {r['pct']:.0f}% of the {r['width']:.1f} cm width, "
+          f"with the rail {r['standoff']:.1f} cm off the edge")
 
-    print(f"Reach       : {geom_reach:.0f} cm from the tilt limit, "
-          f"{args.throw:.0f} cm from the throw -> "
-          f"{min(geom_reach, args.throw):.0f} cm")
-
-    if min(geom_reach, args.throw) < across:
-        short = across - min(geom_reach, args.throw)
-        print(f"              SHORT BY {short:.0f} cm - the far side of the "
-              f"bed cannot be reached.")
-        if geom_reach < args.throw:
-            want_tilt = math.degrees(math.atan2(args.height, across))
-            want_h = across * math.tan(math.radians(args.tilt_min))
-            print(f"              The tilt limit is what binds, not the "
-                  f"throw. Either")
-            print(f"              drop --tilt-min to {want_tilt:.1f} deg, or "
-                  f"raise --height to {want_h:.0f} cm.")
+    if r["short"] > 0.5:
+        reach_advice(r, args.height, args.throw, args.tilt_min)
 
     print("Planning...")
 
@@ -816,9 +821,173 @@ def draw_route(path, bed, plants, rail, steps, patches, cell=2.0,
     return path
 
 
+
+
+
+
+def reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max):
+    """
+    How far across the bed the sprayer can actually land mulch.
+
+    The throw is a SLANT distance - the nozzle is up in the air, so the
+    height is part of it and only what is left over reaches across the
+    ground. Standing the rail off the bed edge spends more of it again.
+
+        ground it can cover = sqrt(throw^2 - height^2) - standoff
+
+    A 12 inch throw therefore does not cover a 12 inch bed from outside
+    it, which is easy to miss when both numbers are the same.
+    """
+    fixed = rail["fixed"]
+
+    # Which bed edge the rail is parked against. It can be mounted on
+    # either side, so take whichever edge it is nearer to as the near one
+    # and measure across to the other.
+    lo, hi = (bed[0], bed[2]) if rail["axis"] == "y" else (bed[1], bed[3])
+    if abs(fixed - lo) <= abs(fixed - hi):
+        near_edge, far_edge = lo, hi
+    else:
+        near_edge, far_edge = hi, lo
+    width = abs(far_edge - near_edge)
+    standoff = abs(near_edge - fixed)
+
+    if throw <= height:
+        flat = 0.0
+    else:
+        flat = math.sqrt(throw ** 2 - height ** 2)
+
+    # The tilt stops can bite before the throw does, so take whichever
+    # limit is tighter.
+    if tilt_min > 0:
+        flat = min(flat, height / math.tan(math.radians(tilt_min)))
+
+    into = flat - standoff
+    return {
+        "width": width,
+        "standoff": standoff,
+        "flat": flat,
+        "into": into,
+        "short": max(0.0, width - into),
+        "pct": max(0.0, min(100.0, into / width * 100)) if width else 0.0,
+        "limit": "tilt" if tilt_min > 0 and height / math.tan(
+            math.radians(tilt_min)) < math.sqrt(max(0.0, throw ** 2 - height ** 2))
+            else "throw",
+    }
+
+
+def report_reach(bed, rail, height, throw, tilt_min, tilt_max):
+    """Say up front how much of the bed is out of range, and why."""
+    r = reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max)
+    axis = "x" if rail["axis"] == "y" else "y"
+
+    print(f"  Reach check")
+    print(f"    Bed is {r['width']:.1f} cm across, rail stands "
+          f"{r['standoff']:.1f} cm off the edge")
+    print(f"    Nozzle {height:.1f} cm up, {throw:.1f} cm throw "
+          f"-> {r['flat']:.1f} cm of ground ({r['limit']} limited)")
+    print(f"    Covers {axis} up to {r['into']:.1f} cm "
+          f"= {r['pct']:.0f}% of the bed")
+
+    if r["short"] > 0.5:
+        print("")
+        print(f"    The far {r['short']:.1f} cm cannot be sprayed from this")
+        print(f"    side. Boxes out there will plan zero points. To fix it,")
+        print(f"    any one of:")
+        need = math.hypot(r["width"] + r["standoff"], height)
+        print(f"      - move the rail to the bed edge "
+              f"(saves {r['standoff']:.1f} cm)")
+        lower = math.sqrt(max(0.0, throw ** 2 - 8.0 ** 2)) - r["standoff"]
+        print(f"      - drop the nozzle to 8 cm "
+              f"(reaches {lower:.1f} cm instead of {r['into']:.1f} cm)")
+        print(f"      - a throw of {need:.1f} cm to cover it as mounted")
+        print(f"      - spray the far side from the other end of the bed")
+    return r
+
+
+
+
+def best_height(throw, tilt_min_deg):
+    """
+    The nozzle height that reaches furthest, and how far that is.
+
+    Two limits fight each other as the nozzle moves up and down:
+
+        throw limit : sqrt(throw^2 - h^2)   - falls as h rises
+        tilt limit  : h / tan(tilt_min)     - rises as h rises
+
+    So reach is worst at both extremes and best where they cross. Setting
+    them equal gives h = throw * sin(tilt_min), and at that height the
+    reach is throw * cos(tilt_min).
+
+    This is why "mount it lower" is not automatically good advice: below
+    the crossing point the tilt limit takes over and reach drops again.
+    """
+    t = math.radians(tilt_min_deg)
+    return throw * math.sin(t), throw * math.cos(t)
+
+
+def reach_advice(r, height, throw, tilt_min):
+    """
+    What to change when the far side of the bed is out of range.
+
+    Every option is costed through reach_into_bed rather than a one-line
+    formula, because which limit binds changes as the numbers move and a
+    throw-only estimate quietly recommends the wrong direction.
+    """
+    span = r["width"] + r["standoff"]
+    print(f"              SHORT BY {r['short']:.1f} cm - the far side cannot "
+          f"be sprayed from this edge.")
+    print(f"              Options, best first:")
+
+    h_opt, reach_opt = best_height(throw, tilt_min)
+    options = []
+
+    # Cost tiers, because reach alone would rank "buy a bigger airbrush"
+    # above "slide the rail 8 cm". 0 = free, just remount or retune.
+    # 1 = a second pass, costs run time. 2 = new hardware.
+    if r["standoff"] > 0.5:
+        options.append((0, min(r["flat"], r["width"]),
+                        f"rail flush with the bed edge instead of "
+                        f"{r['standoff']:.1f} cm out",
+                        f"gains {r['standoff']:.1f} cm, costs nothing"))
+
+    if abs(height - h_opt) > 0.3:
+        gain = (reach_opt - r["standoff"]) - r["into"]
+        if gain > 0.2:
+            options.append((0, reach_opt - r["standoff"],
+                            f"nozzle at {h_opt:.1f} cm rather than "
+                            f"{height:.0f} cm",
+                            f"best height for a {throw:.0f} cm throw at "
+                            f"{tilt_min:.0f} deg, gains {gain:.1f} cm"))
+
+    options.append((1, r["width"],
+                    "spray the far side from the opposite edge",
+                    "two passes, no mechanical change"))
+    need_throw = span / math.cos(math.radians(tilt_min))
+    options.append((2, r["width"],
+                    f"a throw of {need_throw:.1f} cm",
+                    "what it would take to cover the bed as mounted"))
+
+    options.sort(key=lambda o: (o[0], -o[1]))
+    for _, _, what, why in options:
+        print(f"                - {what}")
+        print(f"                  {why}")
+
+    # What the free changes get you together, which is the number that
+    # actually decides whether any hardware needs buying.
+    free = min(reach_opt, span) - 0.0
+    if r["standoff"] > 0.5 or abs(height - h_opt) > 0.3:
+        pct = min(100.0, free / r["width"] * 100)
+        print(f"              Both free changes together: {free:.1f} cm "
+              f"= {pct:.0f}% of the bed.")
+
+    if r["limit"] == "tilt":
+        print(f"              Note: the TILT stop is binding here, not the "
+              f"throw. A bigger")
+        print(f"              airbrush would change nothing until "
+              f"--tilt-min drops.")
+
+
 if __name__ == "__main__":
-    main()
-
-
-
-
+    with safestop.guard("route planning"):
+        main()

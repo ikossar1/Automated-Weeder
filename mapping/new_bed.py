@@ -14,28 +14,57 @@ WHY A GUIDED START
 
     Getting them wrong does not throw an error - it produces a confident,
     wrong map. So this asks for them up front rather than letting a stale
-    value sit in a config file from the last bed.
+    value sit in a config file from the last bed. It is also why pressing
+    Run in the editor is the wrong way in: those configs hold whatever
+    photo was there last time.
+
+PHOTOS LIVE IN ONE PLACE
+    photos/, named bed_YYYYMMDD_note. See photos/NAMING.md for why.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import pathlib
+import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
+import presets as P
+import safestop
+
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 HERE = pathlib.Path(__file__).parent
+PHOTOS = HERE / "photos"
+NAME_RE = re.compile(r"^([a-z]+[a-z0-9]*)_(\d+)$")
 
 
 def find_images():
-    """Every photo under this folder, newest first."""
-    found = []
+    """Photos in photos/, plus any dropped elsewhere by mistake."""
+    PHOTOS.mkdir(exist_ok=True)
+    kept = [p for p in PHOTOS.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES]
+    kept.sort(key=lambda p: -p.stat().st_mtime)
+
+    stray = []
     for p in HERE.rglob("*"):
-        if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES:
-            if "maps" in p.parts or "handoff" in p.parts or "examples" in p.parts:
-                continue
-            found.append(p)
-    found.sort(key=lambda p: -p.stat().st_mtime)
-    return found
+        if not (p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES):
+            continue
+        if set(p.parts) & {"maps", "handoff", "examples", "photos"}:
+            continue
+        stray.append(p)
+    stray.sort(key=lambda p: -p.stat().st_mtime)
+    return kept, stray
+
+
+def check_name(path):
+    """Does it follow NAMING.md? Returns (ok, a run name to suggest)."""
+    m = NAME_RE.match(pathlib.Path(path).stem.lower())
+    if m:
+        bed, number = m.groups()
+        return True, f"{bed}_{number}"
+    return False, pathlib.Path(path).stem.replace(" ", "_").lower()
 
 
 def ask(prompt, default=None, cast=str):
@@ -53,105 +82,222 @@ def ask(prompt, default=None, cast=str):
 
 
 def pick_image():
-    images = find_images()
-    if not images:
-        sys.exit("No photos found under this folder. Put one in and re-run.")
+    kept, stray = find_images()
 
-    print("\nPhotos here, newest first:\n")
-    for i, p in enumerate(images[:15], 1):
-        rel = p.relative_to(HERE)
-        print(f"  {i:2d}. {rel}")
+    if stray:
+        print("\nNot in photos/ - move and rename these when you get a chance:")
+        for p in stray[:6]:
+            print(f"    {p.relative_to(HERE)}")
+        print("    (see photos/NAMING.md)")
+
+    if not kept:
+        sys.exit("\nNothing in photos/. Put a photo there named like\n"
+                 "    basil_1.jpg\n"
+                 "and run this again. See photos/NAMING.md.")
+
+    print("\nPhotos, newest first:\n")
+    for i, p in enumerate(kept[:15], 1):
+        ok, _ = check_name(p)
+        flag = "" if ok else "    <- does not follow NAMING.md"
+        print(f"  {i:2d}. {p.name}{flag}")
     print()
 
-    raw = input("Which one? (number, or type a filename): ").strip()
-    if raw.isdigit() and 1 <= int(raw) <= len(images):
-        return images[int(raw) - 1].relative_to(HERE)
+    raw = input("Which one? (number, or part of the name): ").strip()
 
-    direct = HERE / raw
-    if direct.exists():
+    if raw.isdigit() and 1 <= int(raw) <= len(kept):
+        return kept[int(raw) - 1].relative_to(HERE)
+
+    if (PHOTOS / raw).exists():
+        return (PHOTOS / raw).relative_to(HERE)
+    if (HERE / raw).exists():
         return pathlib.Path(raw)
 
-    matches = [p for p in images if raw.lower() in p.name.lower()]
+    matches = [p for p in kept if raw.lower() in p.name.lower()]
     if len(matches) == 1:
-        print(f"  using {matches[0].relative_to(HERE)}")
+        print(f"  using {matches[0].name}")
         return matches[0].relative_to(HERE)
     if len(matches) > 1:
         sys.exit(f"'{raw}' matches {len(matches)} photos - be more specific")
     sys.exit(f"No photo matching '{raw}'")
 
 
+def pick_candidates():
+    """
+    Which crops are planted in this bed.
+
+    BioCLIP picks a winner from a list, so a shorter list is a better
+    question. A basil bed judged against 23 crops has 22 ways to be
+    confidently wrong; against one crop it has none.
+
+    Weeds are not offered - they always stay in. They are what the crops
+    are being told apart FROM, and without them every dandelion has to
+    land on a crop name.
+    """
+    import bioclip
+
+    choices = bioclip.crop_choices()
+    print("\nWhich crops are in this bed?")
+    print("All the weeds stay in the list either way - this only narrows")
+    print("what a plant can be identified AS.\n")
+
+    for i, (name, cat, common) in enumerate(choices, 1):
+        note = f"  ({common})" if common else ""
+        mark = " *" if cat == "ambiguous" else "  "
+        print(f"  {i:2d}.{mark}{name}{note}")
+
+    print("\n   * also grows wild, so it cannot settle crop vs weed alone")
+    print("\nNumbers separated by spaces, or Enter for all of them.")
+
+    raw = input("  crops: ").strip().replace(",", " ")
+    if not raw:
+        print("  using all crops")
+        return []
+
+    picked = []
+    for bit in raw.split():
+        if bit.isdigit() and 1 <= int(bit) <= len(choices):
+            picked.append(choices[int(bit) - 1][0])
+        else:
+            print(f"  ignoring '{bit}' - not a number on the list")
+
+    if not picked:
+        print("  nothing valid picked, using all crops")
+        return []
+
+    print(f"  using: {', '.join(picked)}")
+    return picked
+
+
 def main():
+    ap = argparse.ArgumentParser(description="Map a new photo.")
+    P.add_arguments(ap)
+    args = ap.parse_args()
+    if P.handle_flags(args):
+        return
+
+    a = P.Answers(P.get(args.preset) if args.preset else None)
+    if args.preset and not a.preset:
+        sys.exit(f"No preset called {args.preset!r}. Try --list-presets.")
+
     print("=" * 62)
-    print("NEW BED")
+    print("NEW BED" + (f"   preset: {args.preset}" if args.preset else ""))
     print("=" * 62)
 
-    image = pick_image()
+    if "photo" in a.preset:
+        image = pathlib.Path(a.record("photo", a.preset["photo"]))
+        if not (HERE / image).exists():
+            sys.exit(f"Preset names photo {str(image)!r}, which is not there.")
+        print(f"Photo: {image}   (preset)")
+    else:
+        image = pick_image()
+        a.record("photo", str(image))
+    ok, suggested = check_name(image)
+    if not ok:
+        print(f"\nNote: '{pathlib.Path(image).name}' is not named the way")
+        print("photos/NAMING.md describes. It will still work, but")
+        print("bed_number keeps the map folder matched to the photo.")
 
     print("\nHow big is the plot, in centimetres?")
     print("  Width is along the NEAR edge, the one closest to the camera.")
     print("  Depth is from the near edge to the far one.")
-    width = ask("  width cm", 30.5, float)
-    depth = ask("  depth cm", 35.0, float)
+    width = a.ask("width", "  width cm", 30.5, float)
+    depth = a.ask("depth", "  depth cm", 35.0, float)
 
-    name = ask("\nName for this run", image.stem.replace(" ", "_"))
+    name = a.ask("name", "\nName for this run", suggested)
 
-    use_results = input(
-        "\nIs there a results.csv from Delaney for this photo? (y/N): "
-    ).strip().lower().startswith("y")
-    results = ask("  path to results.csv", "") if use_results else ""
+    # Corners belong to one photo, so a preset can only replay them when
+    # it is the same photo. Reusing yesterday's corners on today's picture
+    # produces a clean map of nowhere.
+    if "corners" in a.preset:
+        corners = [str(v) for v in a.preset["corners"]]
+        a.record("corners", corners)
+        print(f"\nCorners: {' '.join(corners)}   (preset)")
+    else:
+        print("\n" + "-" * 62)
+        print("Click the four corners of the plot in the window that opens.")
+        print("Order: near-left, near-right, far-right, far-left.")
+        print("Press q when the fourth is down.")
+        print("-" * 62 + "\n")
+        input("Enter when ready...")
 
-    print("\n" + "-" * 62)
-    print("Now click the four corners of the plot in the window that opens.")
-    print("Order: near-left, near-right, far-right, far-left.")
-    print("Press q when the fourth is down.")
-    print("-" * 62 + "\n")
-    input("Enter when ready...")
+        corners_file = HERE / ".corners.json"
+        corners_file.unlink(missing_ok=True)
 
-    subprocess.run([sys.executable, str(HERE / "pick_corners.py"),
-                    str(image), str(width), str(depth)], cwd=HERE)
+        subprocess.run([sys.executable, str(HERE / "pick_corners.py"),
+                        str(image), str(width), str(depth),
+                        "--out", str(corners_file)], cwd=HERE)
 
-    print("\nPaste the eight corner numbers from above.")
-    print("(space separated, in the order it printed them)")
-    while True:
-        raw = input("corners: ").strip().replace(",", " ")
-        bits = raw.split()
-        if len(bits) == 8 and all(b.lstrip("-").replace(".", "").isdigit()
-                                  for b in bits):
-            corners = bits
-            break
-        print("  need exactly eight numbers")
+        # The picker writes them to a file and this reads them back.
+        # Retyping eight numbers is not just tedious - one transposed
+        # digit gives a confident wrong map with nothing to catch it.
+        if not corners_file.exists():
+            sys.exit("\nNo corners were picked, so there is nothing to scan."
+                     "\nRun again and click all four before closing it.")
+
+        corners = [str(v) for v in
+                   json.loads(corners_file.read_text())["corners"]]
+        corners_file.unlink(missing_ok=True)
+        a.record("corners", corners)
+    print(f"\nCorners: {' '.join(corners)}")
+
+    grid = a.ask("grid", "\nGrid, as COLSxROWS", "5x6")
+    merge = a.ask("merge", "Merge radius cm", 4.0, float)
 
     cmd = [sys.executable, str(HERE / "scan.py"), str(image),
            "--corners", *corners,
            "--plot", str(width), str(depth),
-           "--grid", ask("\nGrid, as COLSxROWS", "5x2"),
-           "--merge", str(ask("Merge radius cm", 4.0, float)),
+           "--grid", grid,
+           "--merge", str(merge),
            "--crops", "--out", name]
 
-    if results:
-        cmd += ["--results", results]
-    else:
-        cmd += ["--prompts", ask("Words for the detector", "plant,leaf"),
-                "--conf", str(ask("Minimum confidence", 0.25, float)),
-                "--imgsz", "1600"]
+    # YOLOE's only job is finding plants. Keep the word vague - "plant"
+    # beat "lettuce" 0.41 to 0.14 on our own photos, and "poppy" scored
+    # 0.00 on a poppy. Species come later, from BioCLIP, which is built
+    # for it and has the New England crop and weed lists.
+    print("\nThe detector only has to FIND plants, not name them.")
+    print("Keep the word general - naming happens later, in BioCLIP.")
+    prompts = a.ask("prompts", "  words", "plant")
 
-    print("\n" + "-" * 62)
-    print("Running:")
-    print("  " + " ".join(pathlib.Path(c).name if "\\" in c or "/" in c else c
-                          for c in cmd[1:]))
-    print("-" * 62 + "\n")
+    print("\nMinimum confidence. Lower finds more, including rubbish.")
+    print("0.15 is a good start: on our basil bed 0.25 missed a real")
+    print("plant that scored 0.24.")
+    conf = a.ask("conf", "  confidence", 0.15, float)
+
+    cmd += ["--prompts", prompts, "--conf", str(conf), "--imgsz", "1600"]
+
+    print("\nName the plants with BioCLIP, and keep only the crops?")
+    print("  y      - YOLOE finds them, BioCLIP says what they are, and")
+    print("           the map shows crops only. Weeds are dropped.")
+    print("           Anything it is unsure about counts as a crop.")
+    print("  Enter  - skip it. Every plant goes on the map, unlabelled.")
+    print("           Needs open_clip_torch installed; first run downloads")
+    print("           about 1 GB.")
+    if a.confirm("bioclip", "\nuse BioCLIP? (y / Enter): "):
+        cmd += ["--bioclip", "--only", "crop"]
+        if "candidates" in a.preset:
+            chosen = a.record("candidates", a.preset["candidates"])
+            print(f"  crops: {', '.join(chosen) or 'all'}   (preset)")
+        else:
+            chosen = a.record("candidates", pick_candidates())
+        if chosen:
+            cmd += ["--candidates", ",".join(chosen)]
+
+    print("\n" + "-" * 62 + "\n")
     subprocess.run(cmd, cwd=HERE)
 
     print("\n" + "=" * 62)
     print(f"Check maps/{name}/{name}_corners.png FIRST.")
     print("If the green outline is not on your plot, every number is wrong.")
     print("\nThen plan a spray run:")
-    print(f"  cd ../spraying")
+    print("  cd ../spraying")
     print(f"  python simulate.py ../mapping/maps/{name}/{name}.json \\")
     print(f"      --bed 0 0 {width:g} {depth:g} --rail-length 35 \\")
-    print(f"      --throw 30.5 --height 14 --continuous")
+    print(f"      --throw 30.5 --height 14 --offset-across 3.6 \\")
+    print(f"      --continuous --grid {grid} --grid-only \\")
+    print(f"      --out plans/{name}")
     print("=" * 62)
 
 
 if __name__ == "__main__":
-    main()
+    with safestop.guard("calibration and mapping"):
+        main()

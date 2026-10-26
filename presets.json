@@ -1,0 +1,34 @@
+{
+  "demo_map": {
+    "bioclip": false,
+    "conf": 0.15,
+    "corners": [
+      "43",
+      "646",
+      "1131",
+      "627",
+      "967",
+      "43",
+      "184",
+      "61"
+    ],
+    "depth": 30.0,
+    "grid": "5x2",
+    "merge": 8.0,
+    "name": "demo",
+    "photo": "photos/bed_0.png",
+    "prompts": "plant",
+    "width": 35.0
+  },
+  "demo_spray": {
+    "clearance": 2.0,
+    "depth": 30.0,
+    "grid": "5x2",
+    "height": 14.0,
+    "map": "test_2",
+    "offset": 3.6,
+    "rail": 35.0,
+    "throw": 30.5,
+    "width": 35.0
+  }
+}

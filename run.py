@@ -27,6 +27,9 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import safestop
+
 ROOT = pathlib.Path(__file__).parent
 MAPPING = ROOT / "mapping"
 SPRAYING = ROOT / "spraying"
@@ -148,4 +151,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with safestop.guard("the full run"):
+        main()
