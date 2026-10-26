@@ -116,10 +116,32 @@ class Hardware:
         self.gpio = GPIO
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
-        for a, b in PINS.values():
-            GPIO.setup(a, GPIO.OUT)
-            GPIO.setup(b, GPIO.OUT)
-        GPIO.setup(VALVE_PIN, GPIO.OUT)
+
+        # Release anything a previous run left claimed. A script that was
+        # killed rather than closed keeps its pins, and the next run then
+        # cannot have them.
+        try:
+            GPIO.cleanup()
+        except Exception:
+            pass
+        GPIO.setmode(GPIO.BCM)
+
+        # initial= matters more than it looks. Without it the Pi 5 GPIO
+        # layer reads the pin to find its current level, and that read
+        # fails outright if the line is not already allocated. Saying what
+        # the level should be skips the read - and starting every pin low
+        # is what we want anyway, since low is motors stopped, valve shut.
+        pins = [n for pair in PINS.values() for n in pair] + [VALVE_PIN]
+        for pin in pins:
+            try:
+                GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+            except Exception as exc:
+                sys.exit(
+                    f"Could not claim GPIO {pin}: {exc}" + NL + NL
+                    + "Something else is holding the pins. Usually that is" + NL
+                    + "another script still running - check with:" + NL + NL
+                    + "    ps aux | grep -i python" + NL + NL
+                    + "and stop it, or reboot the Pi if you are not sure.")
         self.all_off()
 
     def _write(self, pin, high):
