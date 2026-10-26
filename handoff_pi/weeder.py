@@ -73,6 +73,18 @@ WORKING_RANGE_CM = 20.0      # typical nozzle-to-soil distance
 RAIL_TRAVEL_CM = 35.0        # 350 mm, stop to stop
 HOME_EXTRA = 1.4             # drive this much longer than a full traverse
 MIN_MOVE_S = 0.15            # below this a move is all acceleration
+
+# No single pan or tilt command may drive longer than this.
+#
+# The plan works out its durations from SPEED below. If the real motor is
+# faster than SPEED says, every turn overshoots, and a bad SPEED can spin
+# an axis right round rather than nudging it a few degrees. This cap is
+# the backstop: it bounds the damage a wrong SPEED can do to one second
+# of travel per command, whatever the plan asked for.
+#
+# It is a safety net, not a fix. If moves are being capped, SPEED is wrong
+# and wants measuring.
+MAX_TURN_S = 1.0
 SETTLE_S = 0.08              # let it stop before the next command
 
 PAN_LIMIT = 90.0             # +/- from the neutral datum
@@ -150,7 +162,7 @@ def wait(hw, seconds):
         time.sleep(seconds)
 
 
-def move(hw, moves, settle=SETTLE_S):
+def move(hw, moves, settle=SETTLE_S, max_turn=MAX_TURN_S):
     """
     Run several axes at once, each stopping at its own deadline.
 
@@ -165,6 +177,12 @@ def move(hw, moves, settle=SETTLE_S):
         if seconds < MIN_MOVE_S:
             print(f"      {axis} {seconds:.3f}s - too short to drive, holding")
             continue
+        # The rail runs against a hard stop and is allowed its long homing
+        # drive. Pan and tilt have no stop, so they are capped.
+        if axis in ("pan", "tilt") and seconds > max_turn:
+            print(f"      {axis} {seconds:.2f}s capped to {max_turn:.2f}s "
+                  f"- check SPEED['{axis}']")
+            seconds = max_turn
         hw.drive(axis, direction)
         live.append((axis, now + seconds))
 
@@ -306,9 +324,70 @@ def summarise(rows):
     return short
 
 
-def run(hw, rows, rehome_every_box=True):
+def list_boxes(rows):
+    """Boxes in the order the plan visits them, with their row counts."""
+    order, counts = [], {}
+    for r in rows:
+        b = r.get("box", "")
+        if b not in counts:
+            order.append(b)
+            counts[b] = [0, 0]
+        counts[b][0] += 1
+        counts[b][1] += 1 if str(r["spray"]).strip() == "1" else 0
+    return [(b, counts[b][0], counts[b][1]) for b in order]
+
+
+def choose_boxes(rows):
+    """
+    Ask which boxes to run, and keep only those rows.
+
+    The plan holds every box the map flagged. Running the lot is right for
+    a finished bed, but while testing you usually want one box, watched
+    closely, before letting it loose on the rest.
+    """
+    boxes = list_boxes(rows)
+    print("")
+    print("  Boxes in this plan:")
+    for i, (name, n, on) in enumerate(boxes):
+        print(f"    [{i}]  box {name:<4} {n:4d} moves, sprays on {on}")
+    print("")
+    print("  Which ones? Numbers from the brackets, separated by spaces.")
+    print("  Blank runs all of them, q quits.")
+    try:
+        answer = input("  > ").strip()
+    except EOFError:
+        answer = ""
+
+    if answer.lower() in ("q", "quit", "n", "no"):
+        return None
+    if not answer:
+        return rows
+
+    wanted = set()
+    for bit in answer.replace(",", " ").split():
+        try:
+            idx = int(bit)
+        except ValueError:
+            print(f"  '{bit}' is not a number, ignoring it")
+            continue
+        if 0 <= idx < len(boxes):
+            wanted.add(boxes[idx][0])
+        else:
+            print(f"  there is no box [{idx}], ignoring it")
+
+    if not wanted:
+        print("  Nothing selected.")
+        return None
+
+    kept = [r for r in rows if r.get("box", "") in wanted]
+    print(f"  Running {len(wanted)} box(es), {len(kept)} moves.")
+    return kept
+
+
+def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
     valve_is_open = False
     last_box = None
+    skipping = None
     t0 = time.monotonic()
 
     for i, r in enumerate(rows):
@@ -319,6 +398,19 @@ def run(hw, rows, rehome_every_box=True):
                 hw.valve(False)
                 valve_is_open = False
             print(f"\n  Box {box}")
+            if confirm:
+                try:
+                    said = input("    Enter to run this box, s to skip, "
+                                 "q to stop: ").strip().lower()
+                except EOFError:
+                    said = ""
+                if said == "q":
+                    print("    Stopping here.")
+                    break
+                if said == "s":
+                    skipping = box
+                    last_box = box
+                    continue
             home_rail(hw)
             last_box = box
 
@@ -330,11 +422,15 @@ def run(hw, rows, rehome_every_box=True):
             hw.valve(False)
             valve_is_open = False
 
+        if skipping is not None and box == skipping:
+            continue
+        skipping = None
+
         took = move(hw, [
             ("rail", int(r["rail_dir"]), float(r["rail_secs"])),
             ("pan",  int(r["pan_dir"]),  float(r["pan_secs"])),
             ("tilt", int(r["tilt_dir"]), float(r["tilt_secs"])),
-        ])
+        ], max_turn=max_turn)
 
         if want_valve and not valve_is_open:
             hw.valve(True)
@@ -388,6 +484,12 @@ def main():
     ap.add_argument("--no-rehome", action="store_true",
                     help="do not home before each box. Faster, and error "
                          "then accumulates across the whole run")
+    ap.add_argument("--pick", action="store_true",
+                    help="choose which boxes to run, and confirm each one "
+                         "before it moves")
+    ap.add_argument("--max-turn", type=float, default=MAX_TURN_S,
+                    help=f"longest single pan or tilt drive, seconds "
+                         f"(default {MAX_TURN_S})")
     ap.add_argument("--calibrate-rail", action="store_true",
                     help="time a full traverse to measure the rail speed")
     args = ap.parse_args()
@@ -408,6 +510,12 @@ def main():
             path = "(built in)"
             rows = load_rows()
 
+        if args.pick:
+            rows = choose_boxes(rows)
+            if not rows:
+                print("  Nothing to do.")
+                return
+
         print("=" * 62)
         print("RUN PLAN" + ("   (dry run)" if args.dry_run else ""))
         print("=" * 62)
@@ -420,7 +528,9 @@ def main():
                     not in ("y", "yes"):
                 sys.exit("\nStopped. Nothing moved.")
 
-        run(hw, rows, rehome_every_box=not args.no_rehome)
+        run(hw, rows, rehome_every_box=not args.no_rehome,
+
+            max_turn=args.max_turn, confirm=args.pick)
 
     except KeyboardInterrupt:
         print("\n\n" + "=" * 62)
