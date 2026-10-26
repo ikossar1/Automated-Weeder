@@ -1,0 +1,79 @@
+{
+  "merge_radius_cm": 4.0,
+  "frames": 1,
+  "rejected": 0,
+  "rows": null,
+  "counts": {
+    "crop": 0,
+    "weed": 0,
+    "unknown": 6
+  },
+  "plants": [
+    {
+      "id": 1,
+      "x_cm": 6.67,
+      "y_cm": 18.57,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.4523,
+      "sightings": 1,
+      "size_cm2": 62.6
+    },
+    {
+      "id": 2,
+      "x_cm": 18.7,
+      "y_cm": 0.22,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.4319,
+      "sightings": 1,
+      "size_cm2": 68.3
+    },
+    {
+      "id": 3,
+      "x_cm": 30.08,
+      "y_cm": 18.19,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.4292,
+      "sightings": 1,
+      "size_cm2": 109.8
+    },
+    {
+      "id": 4,
+      "x_cm": 32.47,
+      "y_cm": 0.09,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.3811,
+      "sightings": 1,
+      "size_cm2": 86.0
+    },
+    {
+      "id": 5,
+      "x_cm": 18.39,
+      "y_cm": 15.44,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.2927,
+      "sightings": 1,
+      "size_cm2": 110.4
+    },
+    {
+      "id": 6,
+      "x_cm": 6.29,
+      "y_cm": -1.02,
+      "kind": "unknown",
+      "label": "Ocimum basilicum",
+      "category": "crop",
+      "confidence": 0.2363,
+      "sightings": 1,
+      "size_cm2": 108.2
+    }
+  ]
+}

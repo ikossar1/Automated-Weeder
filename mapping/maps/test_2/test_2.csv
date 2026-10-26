@@ -1,0 +1,7 @@
+id,kind,category,label,x_cm,y_cm,confidence,sightings,size_cm2
+1,unknown,crop,Ocimum basilicum,6.67,18.57,0.4523,1,62.6
+2,unknown,crop,Ocimum basilicum,18.70,0.22,0.4319,1,68.3
+3,unknown,crop,Ocimum basilicum,30.08,18.19,0.4292,1,109.8
+4,unknown,crop,Ocimum basilicum,32.47,0.09,0.3811,1,86.0
+5,unknown,crop,Ocimum basilicum,18.39,15.44,0.2927,1,110.4
+6,unknown,crop,Ocimum basilicum,6.29,-1.02,0.2363,1,108.2
