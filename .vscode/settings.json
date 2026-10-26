@@ -1,0 +1,15 @@
+{
+  // Two working folders. Terminals open at the repo root so you can cd
+  // into whichever half you are working on.
+  "terminal.integrated.cwd": "${workspaceFolder}",
+
+  // Let the editor resolve imports inside both halves.
+  "python.analysis.extraPaths": ["./mapping", "./spraying"],
+
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true
+  }
+}

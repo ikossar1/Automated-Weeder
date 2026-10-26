@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Model weights - NEVER commit these
+#
+# mobileclip_blt.ts is 572 MB. GitHub hard-rejects any file over 100 MB, so
+# committing it does not just bloat the repo, it makes the push fail outright.
+# yoloe-11s-seg.pt is 27 MB, which would be allowed but still should not go in
+# - binaries never compress or delta well, so every version is stored whole
+# and stays in the history forever, even after deletion.
+#
+# Both files download automatically on first run. The code that fetches them
+# is what belongs in version control; the files themselves do not.
+# ---------------------------------------------------------------------------
+*.pt
+*.pth
+*.ts
+*.onnx
+*.engine
+*.tflite
+*.mlmodel
+
+# ---------------------------------------------------------------------------
+# Generated output - regenerable from the code, so it does not belong here.
+# If you want a specific map FOR THE REPORT, force-add it by name:
+#     git add -f vision/results/final_map.png
+# ---------------------------------------------------------------------------
+runs/
+maps/
+handoff/
+plans/
+*_commands.csv
+*_steps.csv
+motor_timeline.png
+aim_coverage.png
+validation_error.png
+_*.png
+_*.csv
+_*.json
+
+# ---------------------------------------------------------------------------
+# NOT ignored on purpose:
+#   calibration.json  - a measurement of your specific lens. Small, and it
+#                       belongs with the project. Commit it.
+#   poses.csv         - the robot pose per frame. Experimental data. Commit it.
+#   truth.csv         - validation ground truth. This is evidence. Commit it.
+# ---------------------------------------------------------------------------
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# Editors and OS
+# VS Code: keep the run configurations (useful on any machine, and to
+# anyone who clones this), drop the rest of the local editor state.
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

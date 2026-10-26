@@ -1,0 +1,163 @@
+{
+  // Two halves of the project, two working folders.
+  //
+  //   mapping/    photo in, map of where the plants are out
+  //   spraying/   map in, motor commands out
+  //
+  // They meet at one file: a map JSON written by scan.py and read by
+  // simulate.py. Nothing else crosses, which is why the folders can be
+  // worked on independently.
+  //
+  // Pick one from the dropdown at the top of the Run and Debug panel
+  // (the play-with-a-bug icon in the left strip), then press the green
+  // arrow. It runs ONLY the one selected.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // ---------------- MAPPING ----------------
+      // Click the four corners of the plot. Near-left, near-right,
+      // far-right, far-left. Prints eight numbers to paste below.
+      "name": "M1. Pick corners  (Delaney's bed)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/pick_corners.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": ["delaney_output/6crops.jpg", "200", "300"]
+    },
+    {
+      // Reads Delaney's drawn boxes rather than running our own detector.
+      // Writes maps/delaney_bed/ and the handoff bundle.
+      "name": "M2. Map Delaney's bed",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/scan.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": [
+        "delaney_output/6crops.jpg",
+        "--annotations",
+        "--annotation-label", "basil",
+        "--corners", "7", "2543", "2012", "2541", "1721", "1303", "302", "1275",
+        "--plot", "200", "300",
+        "--merge", "12",
+        "--grid", "5x2",
+        "--crops",
+        "--out", "delaney_bed"
+      ]
+    },
+    {
+      // Same bed, but only the plants Delaney marked category A.
+      // Harmless to run before her CSV comes back - it says so and
+      // shows everything.
+      "name": "M3. Map category A only",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/scan.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": [
+        "delaney_output/6crops.jpg",
+        "--annotations", "--annotation-label", "basil",
+        "--corners", "7", "2543", "2012", "2541", "1721", "1303", "302", "1275",
+        "--plot", "200", "300",
+        "--merge", "12", "--grid", "5x2",
+        "--species", "handoff/delaney_bed/crops.csv",
+        "--only", "A",
+        "--out", "delaney_categoryA"
+      ]
+    },
+    {
+      "name": "M4. Detector only  (check it sees the plants)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/annotations.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": ["delaney_output/6crops.jpg"]
+    },
+    {
+      "name": "M5. Calibrate the lens  (needs calib_photos/)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/calibrate.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": ["calib_photos/", "9", "6", "25"]
+    },
+    {
+      "name": "M6. Validate accuracy  (needs truth.csv)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/mapping/validate.py",
+      "cwd": "${workspaceFolder}/mapping",
+      "console": "integratedTerminal",
+      "args": ["truth.csv", "--height", "35", "--tilt", "60"]
+    },
+
+    {
+      // ---------------- SPRAYING ----------------
+      // Proves the aiming maths with no hardware. Run this after any
+      // change to aim.py.
+      "name": "S1. Verify the aiming maths",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spraying/verify_aim.py",
+      "cwd": "${workspaceFolder}/spraying",
+      "console": "integratedTerminal"
+    },
+    {
+      // Reads the map from the mapping half and plans a run.
+      // --throw 30.5 is your measured 12 inches.
+      "name": "S2. Plan a spray run",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spraying/simulate.py",
+      "cwd": "${workspaceFolder}/spraying",
+      "console": "integratedTerminal",
+      "args": [
+        "../mapping/maps/small_bed/small_bed.json",
+        "--bed", "0", "0", "30.5", "35",
+        "--side", "left",
+        "--rail-length", "35",
+        "--throw", "30.5",
+        "--height", "14",
+        "--tilt-min", "18",
+        "--tilt-max", "80",
+        "--stops", "14",
+        "--pan-step", "4",
+        "--tilt-step", "2",
+        "--clearance", "1.5",
+        "--out", "plans/real_bed"
+      ]
+    },
+    {
+      // Plan -> motor commands. DC motors with encoders.
+      "name": "S3. Make motor commands  (DC)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spraying/motors.py",
+      "cwd": "${workspaceFolder}/spraying",
+      "console": "integratedTerminal",
+      "args": ["plans/real_bed/plan.json", "--dc"]
+    },
+    {
+      // How long the run takes and which axis is the bottleneck.
+      "name": "S4. Simulate the motors",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/spraying/motor_sim.py",
+      "cwd": "${workspaceFolder}/spraying",
+      "console": "integratedTerminal",
+      "args": ["dc_commands.csv", "--plan", "plans/real_bed/plan.json"]
+    },
+
+    {
+      "name": "Current file (no arguments)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

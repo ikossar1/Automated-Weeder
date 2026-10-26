@@ -1,0 +1,12 @@
+# Install with:
+#     python -m pip install -r requirements.txt
+#
+# ultralytics pulls in torch, which is a large download (~2 GB) and the slow
+# part of setting up on a new machine. On the Raspberry Pi install it from
+# piwheels so it does not try to compile from source.
+
+ultralytics>=8.3.0      # YOLOE open-vocabulary detection + segmentation
+opencv-python>=4.10.0   # camera calibration, lens distortion
+numpy>=1.26.0
+matplotlib>=3.8.0       # the map and grid plots
+pillow>=10.0.0          # image sizes
