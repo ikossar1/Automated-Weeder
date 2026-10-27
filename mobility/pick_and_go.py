@@ -112,6 +112,12 @@ def main(argv=None):
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--max-turn", type=float, default=RP.MAX_DRIVE_S["pan"],
                     help="longest single pan drive, seconds")
+    ap.add_argument("--rail-x", type=float, default=None, metavar="CM",
+                    help="where the head sits across the bed. Omit for the "
+                         "edge; give a value inside the bed if it is "
+                         "mounted over it (e.g. 15.25 for mid-bed)")
+    ap.add_argument("--pan-limit", type=float, default=None,
+                    help="how far pan may swing either side of its datum")
     ap.add_argument("--duty", type=float, default=RP.DUTY,
                     help=f"motor power percent, lower is slower "
                          f"(default {RP.DUTY:.0f})")
@@ -134,6 +140,24 @@ def main(argv=None):
                    "tilt_max": SB.DEFAULTS["tilt_max"]})
     rail = S.limit_rail(S.build_rail(bed, "left", args.standoff),
                         params["rail_length"])
+
+    if args.rail_x is not None:
+        lo, hi = ((bed[0], bed[2]) if rail["axis"] == "y"
+                  else (bed[1], bed[3]))
+        rail["fixed"] = args.rail_x
+        if lo < args.rail_x < hi:
+            # Mounted over the bed, so boxes sit on BOTH sides of the
+            # head. Pointing across would put half of them behind it and
+            # ask pan for 180 degrees it does not have. Pointing along
+            # the rail instead makes pan a left/right swing, and each
+            # side is then a quarter turn away at most.
+            rail["heading"] = 90.0 if rail["axis"] == "y" else 0.0
+            params["pan_limit"] = args.pan_limit or 90.0
+            print(f"  Head sits {args.rail_x:.2f} cm across the bed, "
+                  f"inside it -")
+            print(f"  aiming along the rail so both sides are in range.")
+    if args.pan_limit:
+        params["pan_limit"] = args.pan_limit
 
     cells = SB.build_cells(bed, plants, args.cols, args.rows)
     for i, c in enumerate(cells):

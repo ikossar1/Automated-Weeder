@@ -844,12 +844,23 @@ def reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max):
     # either side, so take whichever edge it is nearer to as the near one
     # and measure across to the other.
     lo, hi = (bed[0], bed[2]) if rail["axis"] == "y" else (bed[1], bed[3])
-    if abs(fixed - lo) <= abs(fixed - hi):
+
+    # The head can sit inside the bed rather than off one edge. Then
+    # there is no near edge and no far edge - there are two sides, and
+    # what has to be reached is whichever is further away.
+    inside = lo < fixed < hi
+    if inside:
+        near_edge = fixed
+        far_edge = hi if (hi - fixed) >= (fixed - lo) else lo
+    elif abs(fixed - lo) <= abs(fixed - hi):
         near_edge, far_edge = lo, hi
     else:
         near_edge, far_edge = hi, lo
     width = abs(far_edge - near_edge)
     standoff = abs(near_edge - fixed)
+    if inside:
+        # Report the whole bed, since both sides still have to be covered.
+        width = abs(hi - lo)
 
     if throw <= height:
         flat = 0.0
@@ -860,6 +871,23 @@ def reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max):
     # limit is tighter.
     if tilt_min > 0:
         flat = min(flat, height / math.tan(math.radians(tilt_min)))
+
+    if inside:
+        # Reaching out both ways: what has to be covered is the longer
+        # side, and what IS covered is each side capped at the reach.
+        needed = max(hi - fixed, fixed - lo)
+        into = min(flat, needed)
+        covered = min(flat, fixed - lo) + min(flat, hi - fixed)
+        short = max(0.0, needed - flat)
+        return {
+            "width": width, "standoff": 0.0, "flat": flat, "into": into,
+            "short": short,
+            "pct": max(0.0, min(100.0, covered / width * 100)) if width else 0.0,
+            "limit": "tilt" if tilt_min > 0 and height / math.tan(
+                math.radians(tilt_min)) < math.sqrt(
+                    max(0.0, throw ** 2 - height ** 2)) else "throw",
+            "inside": True,
+        }
 
     into = flat - standoff
     return {

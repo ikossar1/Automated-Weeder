@@ -174,6 +174,11 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # exactly on the measured figure will clip honest moves whenever the
 # real speed is a little under what was timed.
 MAX_DRIVE_DEG = {"rail": 10.0, "pan": 10.0}
+
+# Above this tilt the shot is near enough vertical that pan stops
+# mattering: the nozzle is looking almost straight down, so swinging it
+# left or right moves the landing point by very little.
+NEAR_VERTICAL_DEG = 75.0
 GRACE = 1.2
 
 MAX_DRIVE_S = {a: MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE
@@ -274,10 +279,18 @@ class Hardware:
         # Every motor pin is driven through PWM so its speed can be set.
         # The valve and the stepper are not: the valve is open or shut,
         # and a stepper's speed is the gap between pulses, not a voltage.
-        for a, b in PINS.values():
-            for pin in (a, b):
-                self.pwm[pin] = GPIO.PWM(pin, PWM_HZ)
-                self.pwm[pin].start(0)
+        try:
+            for a, b in PINS.values():
+                for pin in (a, b):
+                    self.pwm[pin] = GPIO.PWM(pin, PWM_HZ)
+                    self.pwm[pin].start(0)
+        except Exception as exc:
+            # Without PWM the motors only have one speed, so this is not
+            # something to carry on quietly from.
+            sys.exit(f"Could not set up PWM: {exc}" + NL + NL
+                     + "Without it the motors run at full power only." + NL
+                     + "On a Pi 5 this usually means the GPIO library:" + NL
+                     + "    sudo apt install -y python3-rpi-lgpio")
 
         self.all_off()
 
@@ -649,6 +662,7 @@ def choose_boxes(rows):
 def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
     valve_is_open = False
     last_box = None
+    last_pan = None
     skipping = None
     t0 = time.monotonic()
 
@@ -688,13 +702,30 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
             continue
         skipping = None
 
+        # A target almost directly under the nozzle has a pan angle that
+        # is real but meaningless: a couple of millimetres across the
+        # nozzle flips it by 180 degrees, while the spray lands in
+        # essentially the same place either way. Swinging the head round
+        # to honour that is wasted travel and wasted accuracy, so when
+        # the shot is near vertical the pan is left where it is.
+        pan_dir = int(r["pan_dir"])
+        pan_secs = float(r["pan_secs"])
+        pan_now = float(r["pan_deg"])
+        if (last_pan is not None and abs(pan_now - last_pan) > 120.0
+                and float(r["tilt_deg"]) > NEAR_VERTICAL_DEG):
+            print(f"      pan flip of {abs(pan_now - last_pan):.0f} deg "
+                  f"ignored - spraying near vertical")
+            pan_dir, pan_secs = 0, 0.0
+        else:
+            last_pan = pan_now
+
         # Tilt first, and on its own. Stepping is a tight pulse loop that
         # cannot share the clock with a timed DC move, and the stepper is
         # exact, so there is nothing to gain from overlapping them.
         took = hw.tilt_to(float(r["tilt_deg"]))
         took += move(hw, [
             ("rail", int(r["rail_dir"]), float(r["rail_secs"])),
-            ("pan",  int(r["pan_dir"]),  float(r["pan_secs"])),
+            ("pan",  pan_dir, pan_secs),
         ], max_turn=max_turn)
 
         if want_valve and not valve_is_open:
@@ -711,6 +742,43 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
     if valve_is_open:
         hw.valve(False)
     print(f"\n  Finished in {time.monotonic() - t0:.0f} s")
+
+
+def test_motor(hw, axis="pan", seconds=2.0):
+    """
+    Run one axis at a few power levels so the difference can be seen.
+
+    If all of these look the same speed, PWM is not reaching the motor
+    and the duty cycle is doing nothing - which is a different fault
+    from the duty being set wrong, and wants finding before any more
+    numbers are tuned.
+    """
+    if axis not in PINS:
+        sys.exit(f"No axis {axis!r}. Try: {', '.join(PINS)}")
+
+    print("")
+    print(f"  Testing {axis} on pins {PINS[axis]}")
+    print(f"  Each step runs {seconds:.0f}s forward. Watch the speed.")
+    if hw.dry:
+        print("  (dry run - nothing will actually turn)")
+    print("")
+    for duty in (100.0, 60.0, 30.0, 15.0):
+        print(f"    {duty:5.0f}% ...", end="", flush=True)
+        hw.drive(axis, 1, duty=duty)
+        wait(hw, seconds)
+        hw.stop(axis)
+        wait(hw, 0.4)
+        print(" stopped")
+
+    print("")
+    print("  All four the same speed means PWM is not working:")
+    print("    - rpi-lgpio must be installed, not plain RPi.GPIO")
+    print("      sudo apt install -y python3-rpi-lgpio")
+    print("    - and the code must be the pulled version. Check with:")
+    print("      git -C ~/Automated-Weeder log --oneline -1")
+    print("")
+    print("  Speeds that differ but are all too fast means DUTY wants")
+    print("  lowering - try --duty 15.")
 
 
 def tilt_sweep(hw, degrees=90.0):
@@ -781,6 +849,9 @@ def main():
     ap.add_argument("--max-turn", type=float, default=MAX_TURN_S,
                     help=f"longest single pan or tilt drive, seconds "
                          f"(default {MAX_TURN_S})")
+    ap.add_argument("--test-motor", metavar="AXIS", default=None,
+                    help="run one axis at 100/60/30/15%% power to check "
+                         "that PWM is working")
     ap.add_argument("--tilt-sweep", type=float, nargs="?", const=90.0,
                     default=None, metavar="DEG",
                     help="drive the tilt this many degrees to measure "
@@ -792,6 +863,10 @@ def main():
     hw = Hardware(dry=args.dry_run, real_time=args.real_time)
 
     try:
+        if args.test_motor:
+            test_motor(hw, args.test_motor)
+            return
+
         if args.tilt_sweep is not None:
             tilt_sweep(hw, args.tilt_sweep)
             return
