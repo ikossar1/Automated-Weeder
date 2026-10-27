@@ -81,14 +81,61 @@ def ask(prompt, default=None, cast=str):
             print("  that is not a number, try again")
 
 
+def next_number(bed):
+    """The next free number for this bed, so nothing is overwritten."""
+    used = set()
+    for q in PHOTOS.iterdir():
+        if not q.is_file():
+            continue
+        m = NAME_RE.match(q.stem.lower())
+        if m and m.group(1) == bed:
+            used.add(int(m.group(2)))
+    n = 1
+    while n in used:
+        n += 1
+    return n
+
+
+def adopt(path):
+    """
+    Move a photo into photos/ and name it properly, in place.
+
+    The camera writes photo.jpg every time, so without this each capture
+    either overwrites the last one or accumulates as photo1, photo2,
+    photo_final. Naming it on the way in costs one question and means
+    every map can be traced back to the frame it came from.
+    """
+    path = pathlib.Path(path)
+    ok, _ = check_name(path)
+    if ok and path.parent == PHOTOS:
+        return path
+
+    print("")
+    print(f"  {path.name} does not follow NAMING.md.")
+    print("  Photos are named <bed>_<number>, e.g. basil_1.jpg")
+    bed = input("  What should this bed be called? [bed]: ").strip().lower()
+    bed = re.sub(r"[^a-z0-9]+", "", bed) or "bed"
+
+    target = PHOTOS / f"{bed}_{next_number(bed)}{path.suffix.lower()}"
+    PHOTOS.mkdir(exist_ok=True)
+    path.rename(target)
+    print(f"  Renamed to photos/{target.name}")
+    return target
+
+
 def pick_image():
     kept, stray = find_images()
 
     if stray:
-        print("\nNot in photos/ - move and rename these when you get a chance:")
-        for p in stray[:6]:
-            print(f"    {p.relative_to(HERE)}")
-        print("    (see photos/NAMING.md)")
+        print("")
+        print("Found outside photos/:")
+        for q in stray[:6]:
+            print(f"    {q.relative_to(HERE)}")
+        if input("Move them into photos/ and name them? (y/N): "
+                 ).strip().lower() in ("y", "yes"):
+            for q in stray[:6]:
+                adopt(q)
+            kept, stray = find_images()
 
     if not kept:
         sys.exit("\nNothing in photos/. Put a photo there named like\n"
@@ -105,17 +152,17 @@ def pick_image():
     raw = input("Which one? (number, or part of the name): ").strip()
 
     if raw.isdigit() and 1 <= int(raw) <= len(kept):
-        return kept[int(raw) - 1].relative_to(HERE)
+        return adopt(kept[int(raw) - 1]).relative_to(HERE)
 
     if (PHOTOS / raw).exists():
         return (PHOTOS / raw).relative_to(HERE)
     if (HERE / raw).exists():
         return pathlib.Path(raw)
 
-    matches = [p for p in kept if raw.lower() in p.name.lower()]
+    matches = [q for q in kept if raw.lower() in q.name.lower()]
     if len(matches) == 1:
         print(f"  using {matches[0].name}")
-        return matches[0].relative_to(HERE)
+        return adopt(matches[0]).relative_to(HERE)
     if len(matches) > 1:
         sys.exit(f"'{raw}' matches {len(matches)} photos - be more specific")
     sys.exit(f"No photo matching '{raw}'")
