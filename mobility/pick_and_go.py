@@ -112,6 +112,9 @@ def main(argv=None):
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--max-turn", type=float, default=RP.MAX_DRIVE_S["pan"],
                     help="longest single pan drive, seconds")
+    ap.add_argument("--duty", type=float, default=RP.DUTY,
+                    help=f"motor power percent, lower is slower "
+                         f"(default {RP.DUTY:.0f})")
     ap.add_argument("--standoff", type=float,
                     default=0.0)
     ap.add_argument("--height", type=float, default=9.4)
@@ -143,6 +146,19 @@ def main(argv=None):
           f"{bed[3] - bed[1]:.0f} cm,  {len(plants)} plants")
     S.report_reach(bed, rail, params["height"], params["throw"],
                    params["tilt_min"], params["tilt_max"])
+
+    if args.duty != RP.DUTY:
+        # Changing the power changes how far a given duration turns the
+        # axis, so the speeds and the caps have to move with it.
+        RP.DUTY = args.duty
+        RP.SPEED_DEG = {a: v * args.duty / 100.0
+                        for a, v in RP.SPEED_DEG_FULL.items()}
+        RP.SPEED = {"rail": 4.0 * args.duty / 100.0,
+                    "pan": RP.SPEED_DEG["pan"]}
+        RP.MAX_DRIVE_S = {a: RP.MAX_DRIVE_DEG[a] / RP.SPEED_DEG[a] * RP.GRACE
+                          for a in RP.MAX_DRIVE_DEG}
+        print(f"  Motor power: {args.duty:.0f}%  -> pan "
+              f"{RP.SPEED_DEG['pan']:.1f} deg/s")
 
     hw = RP.Hardware(dry=not args.live)
     if args.live:

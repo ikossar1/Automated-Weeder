@@ -118,13 +118,39 @@ VALVE_PULSE_S = 1.0          # how long to drive it to flip, from the jog script
 INVERT = {"rail": False, "pan": False, "tilt": False}
 
 # Measured, not guessed. Run --calibrate-rail to get the first one.
-# How fast each DC axis actually turns, measured with a stopwatch.
-SPEED_DEG = {"rail": 50.0, "pan": 42.86}
+# How hard the DC motors are driven, as a percentage of full power.
+#
+# They have no gearbox slow enough to be useful at full power, so they
+# are switched on and off a thousand times a second and only left on for
+# this fraction of each cycle. The motor sees the average and turns
+# proportionally slower.
+#
+# Lower is slower, but not forever: below roughly 25% most small DC
+# motors cannot overcome their own friction and will buzz without
+# turning. If an axis stops moving rather than moving slowly, this is
+# too low, not too high.
+PWM_HZ = 1000
+DUTY = 30.0
 
-# rail is cm/s, used only for homing and for turning plan distances into
+# Homing is driven harder than that. It is a blind run into a hard stop
+# whose whole purpose is to overshoot, so the slow, careful speed used
+# for aiming buys nothing and costs 40 seconds a box. Not full power
+# either, because this ends in a collision every single time.
+HOME_DUTY = 70.0
+
+# Measured with a stopwatch at FULL power.
+SPEED_DEG_FULL = {"rail": 50.0, "pan": 42.86}
+
+# What to expect at DUTY. A DC motor is not linear in duty cycle - it
+# loses proportionally more to friction the slower it goes - so this is
+# an estimate and the plan's angles are only as good as it is. Re-time
+# an axis at this duty and put the real figure in if the aim is off.
+SPEED_DEG = {a: v * DUTY / 100.0 for a, v in SPEED_DEG_FULL.items()}
+
+# rail is cm/s, used for homing and for turning plan distances into
 # durations. tilt is absent on purpose: it is a stepper, and its rate
 # comes from TILT_STEP_DELAY.
-SPEED = {"rail": 4.0, "pan": SPEED_DEG["pan"]}
+SPEED = {"rail": 4.0 * DUTY / 100.0, "pan": SPEED_DEG["pan"]}
 SPRAY_PATCH_CM = 5.1         # 2 inches, measured off the airbrush
 WORKING_RANGE_CM = 20.0      # typical nozzle-to-soil distance
 
@@ -146,7 +172,7 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # GRACE is slack for the measurements being eyeballed. A cap that sits
 # exactly on the measured figure will clip honest moves whenever the
 # real speed is a little under what was timed.
-MAX_DRIVE_DEG = {"rail": 100.0, "pan": 40.0}
+MAX_DRIVE_DEG = {"rail": 10.0, "pan": 10.0}
 GRACE = 1.2
 
 MAX_DRIVE_S = {a: MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE
@@ -193,6 +219,7 @@ class Hardware:
         self.real_time = real_time or not dry
         self.log = log if log is not None else []
         self.gpio = None
+        self.pwm = {}
         # Where the stepper believes it is, in degrees from the datum.
         self.tilt_deg = 0.0
         # True until proven otherwise, so the first all_off really pulses
@@ -213,6 +240,7 @@ class Hardware:
             sys.exit("RPi.GPIO not available. Run with --dry-run on a laptop.")
 
         self.gpio = GPIO
+        self.pwm = {}
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
 
@@ -242,20 +270,35 @@ class Hardware:
                     + "another script still running - check with:" + NL + NL
                     + "    ps aux | grep -i python" + NL + NL
                     + "and stop it, or reboot the Pi if you are not sure.")
+        # Every motor pin is driven through PWM so its speed can be set.
+        # The valve and the stepper are not: the valve is open or shut,
+        # and a stepper's speed is the gap between pulses, not a voltage.
+        for a, b in PINS.values():
+            for pin in (a, b):
+                self.pwm[pin] = GPIO.PWM(pin, PWM_HZ)
+                self.pwm[pin].start(0)
+
         self.all_off()
+
+    def _motor(self, pin, duty):
+        if self.dry or pin not in self.pwm:
+            return
+        self.pwm[pin].ChangeDutyCycle(duty)
 
     def _write(self, pin, high):
         if self.dry:
             return
         self.gpio.output(pin, self.gpio.HIGH if high else self.gpio.LOW)
 
-    def drive(self, axis, direction):
+    def drive(self, axis, direction, duty=None):
         """direction is +1, -1 or 0. Nothing else is accepted."""
         fwd, rev = PINS[axis]
         if INVERT[axis]:
             direction = -direction
-        self._write(fwd, direction > 0)
-        self._write(rev, direction < 0)
+        d = DUTY if duty is None else duty
+        self._motor(fwd, d if direction > 0 else 0.0)
+        self._motor(rev, d if direction < 0 else 0.0)
+        self.log.append((axis, direction))
 
     def stop(self, axis):
         self.drive(axis, 0)
@@ -349,6 +392,11 @@ class Hardware:
         finally:
             if old is not None:
                 signal.signal(signal.SIGINT, old)
+        for pwm in self.pwm.values():
+            try:
+                pwm.stop()
+            except Exception:
+                pass
         if not self.dry and self.gpio:
             self.gpio.cleanup()
 
@@ -405,9 +453,11 @@ def home_rail(hw):
     pressed against the stop. That is the one position this machine can
     know exactly.
     """
-    seconds = (RAIL_TRAVEL_CM / SPEED["rail"]) * HOME_EXTRA
-    print(f"    homing rail  ({seconds:.1f}s against the stop)")
-    hw.drive("rail", -1)
+    speed = SPEED["rail"] * (HOME_DUTY / DUTY)
+    seconds = (RAIL_TRAVEL_CM / speed) * HOME_EXTRA
+    print(f"    homing rail  ({seconds:.1f}s against the stop "
+          f"at {HOME_DUTY:.0f}% power)")
+    hw.drive("rail", -1, duty=HOME_DUTY)
     wait(hw, seconds)
     hw.stop("rail")
     wait(hw, SETTLE_S * 3)
