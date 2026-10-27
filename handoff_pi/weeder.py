@@ -159,9 +159,10 @@ SPEED_DEG_FULL = {
     # what was assumed, which is why every move ran past. A slow speed
     # makes the code ask for a LONG drive, so underestimating overshoots.
     "pan": 100.0,
-    # NOT measured yet. Still a full-power stopwatch figure scaled by
-    # duty, which is what was wrong about pan. Run --time-axis tilt.
-    "tilt": 42.86,
+    # Measured the same way, and it came out the same: about 15 deg in
+    # 1.00 s at 15% duty. The two motors are the same part, so matching
+    # figures is what you would expect - the old 42.86 was the outlier.
+    "tilt": 100.0,
 }
 
 # What to expect at DUTY. A DC motor is not linear in duty cycle - it
