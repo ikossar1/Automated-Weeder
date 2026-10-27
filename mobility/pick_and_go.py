@@ -75,9 +75,41 @@ def draw(cells, cols, rows, done):
     print("  Type a number to spray that box, or q to finish.")
 
 
-def plan_one(cell, cells, plants, bed, rail, params):
+def centre_shot(cell, rail, params):
+    """
+    One shot at the middle of the box, and nothing else.
+
+    A full box is covered by a serpentine of eight or so points, and from
+    a head that cannot move they sit at quite different angles - so the
+    nozzle sweeps back and forth across the box and the tilt rises and
+    falls. That is correct, and it is useless for telling whether the
+    machine went to the right place. Aiming once at the centre makes the
+    movement legible: one pan, one tilt, one spray.
+    """
+    pos = rail["lo"]
+    noz = S.nozzle_at(rail, pos, params["height"], params["pan_limit"],
+                      params["tilt_min"], params["tilt_max"],
+                      params["throw"], 0.0, params["offset_across"])
+    shot = A.aim(noz, (cell["x_cm"], cell["y_cm"]))
+    row = [0, round(pos, 1), round(shot.pan_deg, 1), round(shot.tilt_deg, 1),
+           round(cell["x_cm"], 1), round(cell["y_cm"], 1), 0, 0]
+    on = list(row); on[6] = 1
+    off = list(row); off[6] = 0
+    return [row, on, off], shot
+
+
+def plan_one(cell, cells, plants, bed, rail, params, one_shot=False):
     """Work out the moves for a single box, as motor commands."""
-    steps = SB.box_plan(cells, [cell["name"]], plants, bed, rail, params)
+    if one_shot:
+        steps, shot = centre_shot(cell, rail, params)
+        if not shot.ok:
+            print(f"  {cell['name']}: centre is out of reach "
+                  f"({shot.why if hasattr(shot, 'why') else 'no solution'})")
+            return []
+        print(f"  {cell['name']}: pan {shot.pan_deg:+.0f}, "
+              f"tilt {shot.tilt_deg:.0f}")
+    else:
+        steps = SB.box_plan(cells, [cell["name"]], plants, bed, rail, params)
     if not steps:
         return []
 
@@ -118,6 +150,21 @@ def main(argv=None):
                          "mounted over it (e.g. 15.25 for mid-bed)")
     ap.add_argument("--pan-limit", type=float, default=None,
                     help="how far pan may swing either side of its datum")
+    ap.add_argument("--head-x", type=float, default=None, metavar="CM",
+                    help="where the head sits across the bed "
+                         "(default: the middle)")
+    ap.add_argument("--head-y", type=float, default=0.0, metavar="CM",
+                    help="how far the head sits from the near edge "
+                         "(default 0, level with it)")
+    ap.add_argument("--one-shot", action="store_true",
+                    help="aim once at the centre of the box instead of "
+                         "covering it, so the movement is easy to follow")
+    ap.add_argument("--offset", type=float, default=0.0, metavar="CM",
+                    help="camera-to-nozzle offset across the head "
+                         "(default 0 when the rail is off)")
+    ap.add_argument("--all-boxes", action="store_true",
+                    help="allow picking boxes that hold a crop, for "
+                         "testing movement")
     ap.add_argument("--no-rail", action="store_true",
                     help="leave the rail stepper alone and move only pan "
                          "and tilt")
@@ -141,10 +188,28 @@ def main(argv=None):
                    "pan_limit": 70.0, "cell": SB.DEFAULTS["cell"],
                    "tilt_min": SB.DEFAULTS["tilt_min"],
                    "tilt_max": SB.DEFAULTS["tilt_max"]})
-    rail = S.limit_rail(S.build_rail(bed, "left", args.standoff),
-                        params["rail_length"])
+    if args.no_rail:
+        # A fixed head, looking INTO the bed from the near edge.
+        #
+        # With the rail off the head cannot travel, so the two angles
+        # have to cover the whole bed between them: pan swings across
+        # the columns, tilt sets how far out the shot lands. Rows then
+        # differ by tilt alone, which is what you see on the machine -
+        # the far row is aimed at less steeply than the near one.
+        head_x = args.head_x if args.head_x is not None else (bed[2] + bed[0]) / 2
+        rail = {"axis": "y", "fixed": head_x, "lo": args.head_y,
+                "hi": args.head_y, "heading": 90.0}
+        params["pan_limit"] = args.pan_limit or 70.0
+        # The camera-to-nozzle offset is real, but it shifts the nozzle
+        # 3.6 cm sideways from the head - enough to turn a dead-ahead
+        # column into a 22 degree pan and make a movement test look
+        # wrong. For this mode the head position IS the nozzle position.
+        params["offset_across"] = args.offset
+    else:
+        rail = S.limit_rail(S.build_rail(bed, "left", args.standoff),
+                            params["rail_length"])
 
-    if args.rail_x is not None:
+    if args.rail_x is not None and not args.no_rail:
         lo, hi = ((bed[0], bed[2]) if rail["axis"] == "y"
                   else (bed[1], bed[3]))
         rail["fixed"] = args.rail_x
@@ -165,6 +230,11 @@ def main(argv=None):
     cells = SB.build_cells(bed, plants, args.cols, args.rows)
     for i, c in enumerate(cells):
         c["index"] = i
+        if args.all_boxes:
+            # For a movement test the plants do not matter - what is
+            # wanted is every box reachable, so the head can be sent
+            # round all of them and watched.
+            c["count"] = 0
 
     print("=" * 62)
     print(f"PICK AND GO   {'LIVE' if args.live else '(rehearsal)'}")
@@ -188,12 +258,19 @@ def main(argv=None):
               f"{RP.SPEED_DEG['pan']:.1f} deg/s")
 
     if args.no_rail:
-        print("  Rail is OFF - only pan and tilt will move.")
-        print("  The head stays put, so nothing lands where the map says.")
+        print(f"  Rail OFF - head fixed at x={rail['fixed']:.1f}, "
+              f"y={args.head_y:.1f}, looking into the bed.")
+        print("  Pan covers the columns, tilt covers the rows.")
 
     hw = RP.Hardware(dry=not args.live)
     if args.live:
         RP.ask_datum()
+
+    # A movement test should not be stopped by what is growing in the
+    # bed - it is about watching the axes reach each box.
+    aim_plants = [] if args.all_boxes else plants
+    if args.all_boxes:
+        print("  All boxes selectable, plants ignored - movement test only.")
 
     done = set()
     try:
@@ -236,7 +313,8 @@ def main(argv=None):
                 continue
 
             print(f"\n  Planning {cell['name']}...")
-            rows = plan_one(cell, cells, plants, bed, rail, params)
+            rows = plan_one(cell, cells, aim_plants, bed, rail, params,
+                            one_shot=args.one_shot or args.all_boxes)
             if not rows:
                 print("  Nothing in that box is within reach of the sprayer.")
                 print("  The reach check above says how far it can go.")
