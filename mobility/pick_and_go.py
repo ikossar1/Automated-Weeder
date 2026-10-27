@@ -237,26 +237,24 @@ def main(argv=None):
                    "pan_limit": 70.0, "cell": SB.DEFAULTS["cell"],
                    "tilt_min": SB.DEFAULTS["tilt_min"],
                    "tilt_max": SB.DEFAULTS["tilt_max"]})
-    if args.no_rail:
-        # A fixed head, looking INTO the bed from the near edge.
-        #
-        # With the rail off the head cannot travel, so the two angles
-        # have to cover the whole bed between them: pan swings across
-        # the columns, tilt sets how far out the shot lands. Rows then
-        # differ by tilt alone, which is what you see on the machine -
-        # the far row is aimed at less steeply than the near one.
-        head_x = args.head_x if args.head_x is not None else (bed[2] + bed[0]) / 2
-        rail = {"axis": "y", "fixed": head_x, "lo": args.head_y,
-                "hi": args.head_y, "heading": 90.0}
-        params["pan_limit"] = args.pan_limit or 70.0
-        # The camera-to-nozzle offset is real, but it shifts the nozzle
-        # 3.6 cm sideways from the head - enough to turn a dead-ahead
-        # column into a 22 degree pan and make a movement test look
-        # wrong. For this mode the head position IS the nozzle position.
-        params["offset_across"] = args.offset
-    else:
-        rail = S.limit_rail(S.build_rail(bed, "left", args.standoff),
-                            params["rail_length"])
+    # The head looks INTO the bed from the near edge, whether or not the
+    # rail is working. Pan swings across the columns, tilt sets how far
+    # out the shot lands, and the rail - when it is on - carries the head
+    # up the bed so the far rows come within tilt range at all.
+    #
+    # Keeping one geometry for both cases matters: the old code swapped
+    # to an edge-mounted rail pointing sideways as soon as the rail was
+    # enabled, which is a different machine from the one in the room.
+    head_x = args.head_x if args.head_x is not None else (bed[2] + bed[0]) / 2
+    # Aiming is worked out from the head standing still, always. The
+    # rail is a separate axis the operator drives with the letter keys,
+    # and turning it on does not change a single pan or tilt angle -
+    # which is the point: the aiming was checked box by box on the
+    # machine, and enabling another motor should not quietly redo it.
+    rail = {"axis": "y", "fixed": head_x, "lo": args.head_y,
+            "hi": args.head_y, "heading": 90.0}
+    params["pan_limit"] = args.pan_limit or 70.0
+    params["offset_across"] = args.offset
 
     if args.rail_x is not None and not args.no_rail:
         lo, hi = ((bed[0], bed[2]) if rail["axis"] == "y"
