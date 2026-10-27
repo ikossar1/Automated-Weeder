@@ -46,6 +46,7 @@ import csv
 import io
 import math
 import pathlib
+import signal
 import sys
 import time
 
@@ -79,16 +80,27 @@ TILT_STEP_DELAY = 0.002      # seconds per half pulse, from the jog script
 TILT_STEPS_PER_DEG = 4.44
 TILT_DIR_RAISES = True       # True if DIR high tilts the nozzle UP
 
-# The valve sits on two pins through an H-bridge channel, not one pin.
+# The valve LATCHES. It is not a solenoid you hold open.
 #
-# Driving 26 high with 5 low energises it; both low releases it. That is
-# a spring-return valve: it shuts by itself when power is removed, which
-# is the behaviour this code relies on to fail safe.
+# One pulse opens it and it stays open with no power. Another pulse the
+# other way shuts it. Both pins low does not mean shut - it means stay as
+# you are - so the valve can only be closed by actively driving it, never
+# by releasing it.
 #
-# If yours is a latching valve - one that stays put after a pulse - this
-# is WRONG and it will never close. Check by opening it and cutting
-# power: a spring-return shuts, a latching one does not.
-VALVE_PINS = (26, 5)
+# Everything about how this file handles the valve follows from that:
+#
+#   - we track whether it is open, because the hardware will not tell us
+#   - we pulse it shut at startup, because a run that was killed or lost
+#     power may have left it open and there is no way to read which
+#   - an abort pulses it shut and waits for the pulse to finish, rather
+#     than dropping the pins and exiting
+#
+# A spring-return valve would make all of that unnecessary. This one does
+# not forgive a missed command, so nothing here assumes one.
+VALVE_OPEN_PIN = 26
+VALVE_SHUT_PIN = 5
+VALVE_PINS = (VALVE_OPEN_PIN, VALVE_SHUT_PIN)
+VALVE_PULSE_S = 1.0          # how long to drive it to flip, from the jog script
 
 # Set True for any axis wired so that the "forward" pin drives it backwards.
 INVERT = {"rail": False, "pan": False, "tilt": False}
@@ -134,6 +146,9 @@ class Hardware:
         self.gpio = None
         # Where the stepper believes it is, in degrees from the datum.
         self.tilt_deg = 0.0
+        # True until proven otherwise, so the first all_off really pulses
+        # it shut instead of deciding there is nothing to do.
+        self.valve_open = True
 
         if dry:
             print("  DRY RUN - no pins are touched\n")
@@ -192,11 +207,28 @@ class Hardware:
     def stop(self, axis):
         self.drive(axis, 0)
 
-    def valve(self, on):
-        energise, other = VALVE_PINS
+    def valve(self, on, force=False):
+        """
+        Flip the latching valve, and only if it is not already there.
+
+        Pulsing costs a second, so a no-op is worth skipping - but `force`
+        pulses anyway, which is how startup establishes a known state from
+        an unknown one.
+        """
+        if self.valve_open == on and not force:
+            return 0.0
+
+        drive = VALVE_OPEN_PIN if on else VALVE_SHUT_PIN
+        other = VALVE_SHUT_PIN if on else VALVE_OPEN_PIN
         self._write(other, False)
-        self._write(energise, on)
+        self._write(drive, True)
+        if not self.dry:
+            time.sleep(VALVE_PULSE_S)
+        self._write(drive, False)
+
+        self.valve_open = on
         self.log.append(("valve", "open" if on else "shut"))
+        return VALVE_PULSE_S
 
     def tilt_to(self, degrees):
         """
@@ -232,13 +264,38 @@ class Hardware:
         return took
 
     def all_off(self):
-        """Valve first, always. See the note at the top of this file."""
-        self.valve(False)
+        """
+        Valve first, always. See the note at the top of this file.
+
+        The pulse is forced because a latching valve cannot be read: if a
+        previous run died with it open, our idea of its state is wrong,
+        and the only safe move is to drive it shut regardless.
+        """
+        self.valve(False, force=True)
         for axis in PINS:
             self.stop(axis)
+        self._write(TILT_STEP_PIN, False)
 
     def cleanup(self):
-        self.all_off()
+        """
+        Shut down, and do not let a second Ctrl+C break it.
+
+        Closing a latching valve takes a full second of driven pulse. A
+        Ctrl+C landing inside that second would abandon the pulse half
+        way and leave the valve open - the exact state the abort exists
+        to prevent. So interrupts are held off until it is shut, which is
+        a moment of being deliberately unresponsive in exchange for never
+        walking away from an open valve.
+        """
+        try:
+            old = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        except (ValueError, AttributeError):
+            old = None                      # not on the main thread
+        try:
+            self.all_off()
+        finally:
+            if old is not None:
+                signal.signal(signal.SIGINT, old)
         if not self.dry and self.gpio:
             self.gpio.cleanup()
 
@@ -671,7 +728,8 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n" + "=" * 62)
-        print("STOPPED - valve shut first, then motors")
+        print("STOPPING - pulsing the valve shut, then the motors")
+        print("(the valve latches, so this takes a second - let it finish)")
         print("=" * 62)
     finally:
         hw.cleanup()
