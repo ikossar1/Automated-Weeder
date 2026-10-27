@@ -118,6 +118,9 @@ def main(argv=None):
                          "mounted over it (e.g. 15.25 for mid-bed)")
     ap.add_argument("--pan-limit", type=float, default=None,
                     help="how far pan may swing either side of its datum")
+    ap.add_argument("--no-rail", action="store_true",
+                    help="leave the rail stepper alone and move only pan "
+                         "and tilt")
     ap.add_argument("--duty", type=float, default=RP.DUTY,
                     help=f"motor power percent, lower is slower "
                          f"(default {RP.DUTY:.0f})")
@@ -184,6 +187,10 @@ def main(argv=None):
         print(f"  Motor power: {args.duty:.0f}%  -> pan "
               f"{RP.SPEED_DEG['pan']:.1f} deg/s")
 
+    if args.no_rail:
+        print("  Rail is OFF - only pan and tilt will move.")
+        print("  The head stays put, so nothing lands where the map says.")
+
     hw = RP.Hardware(dry=not args.live)
     if args.live:
         RP.ask_datum()
@@ -241,7 +248,8 @@ def main(argv=None):
                 print("  Nothing would be sprayed, so not moving.")
                 continue
 
-            RP.run(hw, rows, rehome_every_box=True, max_turn=args.max_turn)
+            RP.run(hw, rows, rehome_every_box=True,
+                   max_turn=args.max_turn, use_rail=not args.no_rail)
             done.add(cell["name"])
             print(f"  {cell['name']} done.")
     except KeyboardInterrupt:

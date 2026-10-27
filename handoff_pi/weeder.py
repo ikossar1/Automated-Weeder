@@ -696,7 +696,8 @@ def choose_boxes(rows):
     return kept
 
 
-def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
+def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
+        confirm=False, use_rail=True):
     valve_is_open = False
     last_box = None
     last_pan = None
@@ -724,7 +725,10 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
                     skipping = box
                     last_box = box
                     continue
-            home_rail(hw)
+            if use_rail:
+                home_rail(hw)
+            else:
+                print("    rail off - not homing")
             last_box = box
 
         want_valve = r["spray"] == "1"
@@ -759,7 +763,11 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
         # Tilt first, and on its own. Stepping is a tight pulse loop that
         # cannot share the clock with a timed DC move, and the stepper is
         # exact, so there is nothing to gain from overlapping them.
-        took = hw.rail_to(float(r["rail_cm"]))
+        # With the rail off the head stays put and only the aiming axes
+        # move. Shots then land wherever the head happens to be, which is
+        # wrong on purpose - it is for watching pan and tilt behave, not
+        # for spraying a bed.
+        took = hw.rail_to(float(r["rail_cm"])) if use_rail else 0.0
         took += move(hw, [
             ("pan",  pan_dir, pan_secs),
             ("tilt", int(r["tilt_dir"]), float(r["tilt_secs"])),
@@ -857,6 +865,9 @@ def main():
     ap.add_argument("--no-rehome", action="store_true",
                     help="do not home before each box. Faster, and error "
                          "then accumulates across the whole run")
+    ap.add_argument("--no-rail", action="store_true",
+                    help="leave the rail stepper alone and move only pan "
+                         "and tilt")
     ap.add_argument("--pick", action="store_true",
                     help="choose which boxes to run, and confirm each one "
                          "before it moves")
@@ -912,8 +923,8 @@ def main():
                 sys.exit("\nStopped. Nothing moved.")
 
         run(hw, rows, rehome_every_box=not args.no_rehome,
-
-            max_turn=args.max_turn, confirm=args.pick)
+            max_turn=args.max_turn, confirm=args.pick,
+            use_rail=not args.no_rail)
 
     except KeyboardInterrupt:
         print("\n\n" + "=" * 62)
