@@ -153,7 +153,16 @@ HOME_DUTY = 70.0
 
 # Measured with a stopwatch at FULL power, against the axes as they
 # actually are: 23/24 is pan, 27/22 is tilt.
-SPEED_DEG_FULL = {"pan": 50.0, "tilt": 42.86}
+SPEED_DEG_FULL = {
+    # Measured on the machine: 1.00 s at 15% duty turned it 10-20 deg.
+    # Taking the middle, 15 deg, that is 100 deg/s at full power - twice
+    # what was assumed, which is why every move ran past. A slow speed
+    # makes the code ask for a LONG drive, so underestimating overshoots.
+    "pan": 100.0,
+    # NOT measured yet. Still a full-power stopwatch figure scaled by
+    # duty, which is what was wrong about pan. Run --time-axis tilt.
+    "tilt": 42.86,
+}
 
 # What to expect at DUTY. A DC motor is not linear in duty cycle - it
 # loses proportionally more to friction the slower it goes - so this is
@@ -190,7 +199,7 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # moves that should have been a few degrees ran far past. Until each
 # axis has been timed at the duty it will really run at, this is what
 # bounds the damage, and it is deliberately short.
-MAX_DRIVE_S_HARD = 0.35
+MAX_DRIVE_S_HARD = 0.70
 
 MAX_DRIVE_DEG = {"pan": 10.0, "tilt": 10.0}
 
@@ -206,7 +215,7 @@ NEAR_VERTICAL_DEG = 75.0
 # several capped drives assumed the speed estimate was roughly right, so
 # repeating until the target was reached would arrive. It is not right -
 # a single drive already overshot - and repeating drove further past.
-MAX_DRIVE_STEPS = 1
+MAX_DRIVE_STEPS = 20
 GRACE = 1.2
 
 MAX_DRIVE_S = {a: min(MAX_DRIVE_S_HARD,
@@ -279,6 +288,16 @@ class Hardware:
             import RPi.GPIO as GPIO
         except ImportError:
             sys.exit("RPi.GPIO not available. Run with --dry-run on a laptop.")
+
+        # RPi.GPIO's PWM objects finalise themselves at interpreter exit,
+        # by which time the GPIO chip handle is already None - so they
+        # print a TypeError traceback that looks like a crash and is
+        # nothing of the sort. There is no supported way to detach them,
+        # so the finaliser is removed once, here.
+        try:
+            GPIO.PWM.__del__ = lambda self: None
+        except Exception:
+            pass
 
         self.gpio = GPIO
         self.pwm = {}
