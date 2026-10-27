@@ -44,7 +44,15 @@ def newest_map():
     return sorted(beds, key=lambda d: -d.stat().st_mtime)[0]
 
 
-def draw(cells, cols, rows, done, hw=None):
+RAIL_KEYS = "abcdefgh"
+
+
+def rail_stops(step_mm, count):
+    """Where along the rail the head may be parked, in cm from home."""
+    return [(RAIL_KEYS[i], i * step_mm / 10.0) for i in range(count)]
+
+
+def draw(cells, cols, rows, done, hw=None, stops=()):
     """
     The grid, as text.
 
@@ -55,8 +63,16 @@ def draw(cells, cols, rows, done, hw=None):
     by_name = {c["name"]: c for c in cells}
     width = 7
 
+    # The rail stops print down the right of the grid, so the two things
+    # the operator can choose - which box to aim at, and where along the
+    # rail to stand - are read in one glance rather than two menus.
+    gap = "     "
+    head = "    " + "".join(f"{'C' + str(c + 1):^{width}}" for c in range(cols))
+    if stops:
+        head += gap + "rail"
     print("")
-    print("    " + "".join(f"{'C' + str(c + 1):^{width}}" for c in range(cols)))
+    print(head)
+
     for r in range(rows):
         line = f" R{r + 1} "
         for c in range(cols):
@@ -69,7 +85,21 @@ def draw(cells, cols, rows, done, hw=None):
                 line += f"{'done':^{width}}"
             else:
                 line += f"{str(cell['index']):^{width}}"
+        if r < len(stops):
+            key, cm = stops[r]
+            here = ""
+            if hw is not None and abs(hw.rail_cm - cm) < 0.2:
+                here = "  <- here"
+            line += f"{gap} {key}  {cm * 10:3.0f} mm{here}"
         print(line)
+
+    # Any stops past the last grid row carry on underneath it.
+    for key, cm in stops[rows:]:
+        pad = "    " + " " * (width * cols)
+        here = ""
+        if hw is not None and abs(hw.rail_cm - cm) < 0.2:
+            here = "  <- here"
+        print(f"{pad}{gap} {key}  {cm * 10:3.0f} mm{here}")
     if hw is not None:
         # Where the code thinks the axes are. This is a running total of
         # what it has commanded, not a measurement - nothing on this
@@ -79,7 +109,8 @@ def draw(cells, cols, rows, done, hw=None):
               f"tilt {hw.angle['tilt']:+.0f} deg")
     print("")
     print("  [crop] holds a plant and cannot be sprayed.")
-    print("  number  aim at that box      n  back to neutral")
+    print("  number  aim at that box      letter  move the rail there")
+    print("  n       back to neutral")
     print("  r       retrace backwards, valve shut")
     print("  z       call this position neutral")
     print("  q       finish")
@@ -166,6 +197,10 @@ def main(argv=None):
     ap.add_argument("--head-y", type=float, default=0.0, metavar="CM",
                     help="how far the head sits from the near edge "
                          "(default 0, level with it)")
+    ap.add_argument("--rail-step", type=float, default=80.0, metavar="MM",
+                    help="spacing of the rail stops in mm (default 80)")
+    ap.add_argument("--rail-stops", type=int, default=3,
+                    help="how many rail stops to offer (default 3)")
     ap.add_argument("--max-drive", type=float, default=RP.MAX_DRIVE_S_HARD,
                     metavar="SEC", help="longest one drive may run")
     ap.add_argument("--drive-steps", type=int, default=RP.MAX_DRIVE_STEPS,
@@ -293,19 +328,40 @@ def main(argv=None):
     if args.all_boxes:
         print("  All boxes selectable, plants ignored - movement test only.")
 
+    stops = rail_stops(args.rail_step, args.rail_stops)
     done = set()
     # Where each box was aimed, in the order they were done, so the run
     # can be walked back through.
     history = []
     try:
         while True:
-            draw(cells, args.cols, args.rows, done, hw)
+            draw(cells, args.cols, args.rows, done, hw, stops)
             try:
                 said = input("  > ").strip().lower()
             except EOFError:
                 break
             if said in ("q", "quit", "exit"):
                 break
+
+            picked_stop = [s for s in stops if s[0] == said]
+            if picked_stop:
+                key, cm = picked_stop[0]
+                if args.no_rail:
+                    print(f"  Rail is off (--no-rail), so {key} cannot "
+                          f"move it. Drop that flag to use the stops.")
+                    continue
+                # Travelling, so the valve is shut first - the same rule
+                # the box runs follow.
+                hw.valve(False)
+                print(f"  Rail to {cm * 10:.0f} mm ...")
+                was = RP.MAX_DRIVE_STEPS
+                RP.MAX_DRIVE_STEPS = 40
+                try:
+                    hw.rail_to(cm)
+                finally:
+                    RP.MAX_DRIVE_STEPS = was
+                print(f"  Rail now at {hw.rail_cm * 10:.0f} mm.")
+                continue
 
             if said == "z":
                 # The datum has drifted - from a force-stop, from being
