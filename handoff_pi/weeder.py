@@ -70,10 +70,20 @@ PINS = {
 # machinery below - MIN_MOVE_S, MAX_TURN_S - applies to it.
 TILT_STEP_PIN = 25
 TILT_DIR_PIN = 6
-# Seconds per half pulse. At 4.44 steps/deg this sets the tilt rate:
-#     1 / (4.44 * 2 * 0.001931) = 58.3 deg/s
-# which is the jog script's 56.3 deg/s plus the 2 deg/s asked for.
-TILT_STEP_DELAY = 0.001931
+# Seconds per half pulse. With 4.44 steps/deg this sets the tilt rate:
+#     1 / (4.44 * 2 * 0.000483) = 233 deg/s
+# which is four times the jog script's 56.3 deg/s.
+#
+# That is 1036 full steps a second, and at that rate time.sleep stops
+# being usable - it cannot resolve half a millisecond and its own
+# overhead is the same size as the wait. _hold below busy-waits instead,
+# which costs a pegged CPU core for the length of a move and buys a step
+# rate that is actually what it says.
+#
+# Steppers also stall if asked to start straight into a high rate, and
+# there is no acceleration ramp here. If tilt buzzes without turning,
+# that is this number being too small, not the wiring.
+TILT_STEP_DELAY = 0.000483
 
 # MEASURE THIS. The default assumes a 200 step motor driven at the
 # EasyDriver's 1/8 microstep default, turning the nozzle directly:
@@ -109,9 +119,13 @@ VALVE_PULSE_S = 1.0          # how long to drive it to flip, from the jog script
 INVERT = {"rail": False, "pan": False, "tilt": False}
 
 # Measured, not guessed. Run --calibrate-rail to get the first one.
-# rail is cm/s; pan is deg/s, measured as 40 deg in 0.5 s.
-# tilt is not here - it is a stepper and its rate is set by TILT_STEP_DELAY.
-SPEED = {"rail": 4.0, "pan": 80.0}
+# How fast each DC axis actually turns, measured with a stopwatch.
+SPEED_DEG = {"rail": 50.0, "pan": 42.86}
+
+# rail is cm/s, used only for homing and for turning plan distances into
+# durations. tilt is absent on purpose: it is a stepper, and its rate
+# comes from TILT_STEP_DELAY.
+SPEED = {"rail": 4.0, "pan": SPEED_DEG["pan"]}
 SPRAY_PATCH_CM = 5.1         # 2 inches, measured off the airbrush
 WORKING_RANGE_CM = 20.0      # typical nozzle-to-soil distance
 
@@ -119,21 +133,25 @@ RAIL_TRAVEL_CM = 35.0        # 350 mm, stop to stop
 HOME_EXTRA = 1.4             # drive this much longer than a full traverse
 MIN_MOVE_S = 0.15            # below this a move is all acceleration
 
-# The longest a single command may drive each DC axis.
+# Measured on the machine, not taken from the rating. Both DC motors are
+# rated 10 RPM - 60 deg/s - and neither runs at it:
 #
-# Measured on the machine rather than taken from the rating. Both motors
-# are rated 10 RPM, which is 60 deg/s, but they do not run at the rating:
+#     up/down     70 deg in 1.4 s  =  50.0 deg/s
+#     left/right 150 deg in 3.5 s  =  42.9 deg/s
 #
-#     up/down    100 deg in 1.5 s  =  67 deg/s
-#     left/right  40 deg in 0.5 s  =  80 deg/s
+# The caps are written as the furthest one command may take an axis, in
+# degrees, and converted to seconds here. That way a re-measured speed
+# updates the cap by itself, instead of leaving a stale number in
+# seconds that no longer means the angle it was chosen to mean.
 #
-# These caps bound how far one command can take an axis if the plan's
-# durations are wrong. They are a backstop, not a calibration - the fix
-# for a wrong angle is a right SPEED, not a tighter cap.
-#
-# Homing does not come through here: it drives the pin directly, because
-# the whole point of driving into a stop is to overshoot.
-MAX_DRIVE_S = {"rail": 1.5, "pan": 0.5}
+# GRACE is slack for the measurements being eyeballed. A cap that sits
+# exactly on the measured figure will clip honest moves whenever the
+# real speed is a little under what was timed.
+MAX_DRIVE_DEG = {"rail": 100.0, "pan": 40.0}
+GRACE = 1.2
+
+MAX_DRIVE_S = {a: MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE
+               for a in MAX_DRIVE_DEG}
 MAX_TURN_S = MAX_DRIVE_S["pan"]      # what --max-turn starts from
 SETTLE_S = 0.08              # let it stop before the next command
 
@@ -142,6 +160,28 @@ TILT_LIMIT = 80.0
 
 
 # ---------------------------------------------------------------------------
+
+def _hold(seconds):
+    """
+    Wait a very short time, accurately.
+
+    time.sleep is fine down to a millisecond or so and useless below it:
+    it rounds up, and the cost of calling it is about the same as the
+    wait being asked for. The stepper needs half-millisecond pulses, so
+    below a millisecond this spins on the clock instead. It burns a core
+    while it runs, which is an acceptable price for a few hundred
+    milliseconds of stepping and would not be for anything longer.
+    """
+    # The threshold is 5 ms, not 1. time.sleep was measured running 35%
+    # long at 2 ms, so anything near a millisecond is spun rather than
+    # slept - the old 2 ms pulse was quietly a 2.7 ms one.
+    if seconds >= 0.005:
+        time.sleep(seconds)
+        return
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        pass
+
 
 class Hardware:
     """The pins. Or, with --dry-run, a convincing impression of them."""
@@ -266,9 +306,9 @@ class Hardware:
             time.sleep(0.001)
             for _ in range(abs(steps)):
                 self._write(TILT_STEP_PIN, True)
-                time.sleep(TILT_STEP_DELAY)
+                _hold(TILT_STEP_DELAY)
                 self._write(TILT_STEP_PIN, False)
-                time.sleep(TILT_STEP_DELAY)
+                _hold(TILT_STEP_DELAY)
 
         # Only the rounding is lost, and it is lost once rather than
         # compounding, because the next move is worked out from where we
