@@ -164,7 +164,20 @@ def main(argv=None):
             try:
                 idx = int(said)
             except ValueError:
-                print(f"  '{said}' is not a number.")
+                # Typing a shell command here is the easy mistake: this
+                # prompt looks enough like a shell that a second command
+                # gets typed into the still-running first one, which then
+                # eats it as a box number and appears to do nothing.
+                if any(said.startswith(w) for w in
+                       ("python", "cd ", "ls", "git", "sudo", "./")):
+                    print("")
+                    print("  That is a shell command, and this is not a shell -")
+                    print("  pick_and_go is still running and just read it as")
+                    print("  your box choice.")
+                    print("")
+                    print("  Type  q  to leave, then run your command.")
+                else:
+                    print(f"  '{said}' is not a number.")
                 continue
             if not 0 <= idx < len(cells):
                 print(f"  There is no box {idx}.")
