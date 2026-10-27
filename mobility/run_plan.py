@@ -129,8 +129,13 @@ INVERT = {"rail": False, "pan": False, "tilt": False}
 # motors cannot overcome their own friction and will buzz without
 # turning. If an axis stops moving rather than moving slowly, this is
 # too low, not too high.
-PWM_HZ = 1000
-DUTY = 30.0
+# 100 Hz rather than a few kHz. A brushed motor turning slowly needs
+# each pulse to be long enough to break static friction, and at 1 kHz
+# the pulses are too short to do that - the motor hums and sits still.
+# A slower switching frequency gives a bigger kick per pulse, which is
+# what makes a low duty cycle actually turn the shaft.
+PWM_HZ = 100
+DUTY = 15.0
 
 # Homing is driven harder than that. It is a blind run into a hard stop
 # whose whole purpose is to overshoot, so the slow, careful speed used
