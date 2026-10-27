@@ -44,7 +44,7 @@ def newest_map():
     return sorted(beds, key=lambda d: -d.stat().st_mtime)[0]
 
 
-def draw(cells, cols, rows, done):
+def draw(cells, cols, rows, done, hw=None):
     """
     The grid, as text.
 
@@ -70,9 +70,19 @@ def draw(cells, cols, rows, done):
             else:
                 line += f"{str(cell['index']):^{width}}"
         print(line)
+    if hw is not None:
+        # Where the code thinks the axes are. This is a running total of
+        # what it has commanded, not a measurement - nothing on this
+        # machine reports an angle back. If it disagrees with what you
+        # can see, the belief is what is wrong, and z fixes it.
+        print(f"  Believed now: pan {hw.angle['pan']:+.0f}, "
+              f"tilt {hw.angle['tilt']:+.0f} deg")
     print("")
     print("  [crop] holds a plant and cannot be sprayed.")
-    print("  Type a number to spray that box, or q to finish.")
+    print("  number  aim at that box      n  back to neutral")
+    print("  r       retrace backwards, valve shut")
+    print("  z       call this position neutral")
+    print("  q       finish")
 
 
 def centre_shot(cell, rail, params):
@@ -284,15 +294,74 @@ def main(argv=None):
         print("  All boxes selectable, plants ignored - movement test only.")
 
     done = set()
+    # Where each box was aimed, in the order they were done, so the run
+    # can be walked back through.
+    history = []
     try:
         while True:
-            draw(cells, args.cols, args.rows, done)
+            draw(cells, args.cols, args.rows, done, hw)
             try:
                 said = input("  > ").strip().lower()
             except EOFError:
                 break
             if said in ("q", "quit", "exit"):
                 break
+
+            if said == "z":
+                # The datum has drifted - from a force-stop, from being
+                # nudged by hand, or from the run starting somewhere
+                # other than neutral. Declaring the current position as
+                # zero costs nothing and puts every later angle back on
+                # a footing that matches the machine.
+                hw.angle["pan"] = 0.0
+                hw.angle["tilt"] = 0.0
+                print("  Noted - this position is now neutral.")
+                continue
+
+            if said == "r":
+                if not history:
+                    print("  Nothing done yet to retrace.")
+                    continue
+                # Back through the same aim points in reverse, valve shut
+                # throughout. Useful for checking that the angles the
+                # machine reached on the way out are repeatable, without
+                # laying any more mulch while doing it.
+                print(f"  Retracing {len(history)} box(es) backwards, "
+                      f"valve stays shut.")
+                hw.valve(False)
+                was = RP.MAX_DRIVE_STEPS
+                RP.MAX_DRIVE_STEPS = 40
+                try:
+                    for name, pan, tilt in reversed(history):
+                        print(f"    back to {name}  "
+                              f"pan {pan:+.0f}, tilt {tilt:.0f}")
+                        hw.turn_to("pan", pan)
+                        hw.turn_to("tilt", tilt)
+                    print("    and back to neutral")
+                    hw.turn_to("tilt", 0.0)
+                    hw.turn_to("pan", 0.0)
+                finally:
+                    RP.MAX_DRIVE_STEPS = was
+                    hw.valve(False)
+                history.clear()
+                done.clear()
+                continue
+
+            if said == "n":
+                # Allowed to run to completion rather than one short
+                # drive at a time. Aiming is kept incremental because a
+                # wrong speed should only be able to be wrong by a few
+                # degrees - but going back to a known datum is a thing
+                # you ask for deliberately and want finished.
+                print("  Returning to neutral...")
+                was = RP.MAX_DRIVE_STEPS
+                RP.MAX_DRIVE_STEPS = 40
+                try:
+                    hw.turn_to("tilt", 0.0)
+                    hw.turn_to("pan", 0.0)
+                finally:
+                    RP.MAX_DRIVE_STEPS = was
+                continue
             if not said:
                 continue
 
@@ -339,6 +408,8 @@ def main(argv=None):
 
             RP.run(hw, rows, rehome_every_box=True,
                    max_turn=args.max_turn, use_rail=not args.no_rail)
+            history.append((cell["name"], float(rows[-1]["pan_deg"]),
+                            float(rows[-1]["tilt_deg"])))
             done.add(cell["name"])
             print(f"  {cell['name']} done.")
     except KeyboardInterrupt:
