@@ -447,6 +447,13 @@ def main(argv=None):
                 continue
 
             print(f"\n  Planning {cell['name']}...")
+            # use_rail=False below is not about --no-rail. Aiming at a
+            # box only ever moves pan and tilt: the plan carries a rail
+            # position of 0, because that is where the aiming geometry
+            # stands the head, and letting the box run act on it would
+            # drag the head back to 0 every time a box was pressed after
+            # the rail had been moved by hand. The rail belongs to the
+            # letter keys and to nothing else.
             rows = plan_one(cell, cells, aim_plants, bed, rail, params,
                             one_shot=args.one_shot or args.all_boxes)
             if not rows:
@@ -461,7 +468,7 @@ def main(argv=None):
                 continue
 
             RP.run(hw, rows, rehome_every_box=True,
-                   max_turn=args.max_turn, use_rail=not args.no_rail)
+                   max_turn=args.max_turn, use_rail=False)
             history.append((cell["name"], float(rows[-1]["pan_deg"]),
                             float(rows[-1]["tilt_deg"])))
             done.add(cell["name"])
