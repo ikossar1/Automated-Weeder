@@ -110,8 +110,8 @@ def main(argv=None):
                     help="bed depth cm, along the rail (default 35)")
     ap.add_argument("--cols", type=int, default=4)
     ap.add_argument("--rows", type=int, default=2)
-    ap.add_argument("--max-turn", type=float, default=0.3,
-                    help="longest single pan drive, seconds (default 0.3)")
+    ap.add_argument("--max-turn", type=float, default=RP.MAX_DRIVE_S["pan"],
+                    help="longest single pan drive, seconds")
     ap.add_argument("--standoff", type=float,
                     default=0.0)
     ap.add_argument("--height", type=float, default=9.4)

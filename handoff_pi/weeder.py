@@ -70,7 +70,10 @@ PINS = {
 # machinery below - MIN_MOVE_S, MAX_TURN_S - applies to it.
 TILT_STEP_PIN = 25
 TILT_DIR_PIN = 6
-TILT_STEP_DELAY = 0.002      # seconds per half pulse, from the jog script
+# Seconds per half pulse. At 4.44 steps/deg this sets the tilt rate:
+#     1 / (4.44 * 2 * 0.001931) = 58.3 deg/s
+# which is the jog script's 56.3 deg/s plus the 2 deg/s asked for.
+TILT_STEP_DELAY = 0.001931
 
 # MEASURE THIS. The default assumes a 200 step motor driven at the
 # EasyDriver's 1/8 microstep default, turning the nozzle directly:
@@ -106,7 +109,9 @@ VALVE_PULSE_S = 1.0          # how long to drive it to flip, from the jog script
 INVERT = {"rail": False, "pan": False, "tilt": False}
 
 # Measured, not guessed. Run --calibrate-rail to get the first one.
-SPEED = {"rail": 4.0, "pan": 20.0, "tilt": 20.0}      # cm/s, deg/s, deg/s
+# rail is cm/s; pan is deg/s, measured as 40 deg in 0.5 s.
+# tilt is not here - it is a stepper and its rate is set by TILT_STEP_DELAY.
+SPEED = {"rail": 4.0, "pan": 80.0}
 SPRAY_PATCH_CM = 5.1         # 2 inches, measured off the airbrush
 WORKING_RANGE_CM = 20.0      # typical nozzle-to-soil distance
 
@@ -114,17 +119,22 @@ RAIL_TRAVEL_CM = 35.0        # 350 mm, stop to stop
 HOME_EXTRA = 1.4             # drive this much longer than a full traverse
 MIN_MOVE_S = 0.15            # below this a move is all acceleration
 
-# No single pan or tilt command may drive longer than this.
+# The longest a single command may drive each DC axis.
 #
-# The plan works out its durations from SPEED below. If the real motor is
-# faster than SPEED says, every turn overshoots, and a bad SPEED can spin
-# an axis right round rather than nudging it a few degrees. This cap is
-# the backstop: it bounds the damage a wrong SPEED can do to one second
-# of travel per command, whatever the plan asked for.
+# Measured on the machine rather than taken from the rating. Both motors
+# are rated 10 RPM, which is 60 deg/s, but they do not run at the rating:
 #
-# It is a safety net, not a fix. If moves are being capped, SPEED is wrong
-# and wants measuring.
-MAX_TURN_S = 1.0
+#     up/down    100 deg in 1.5 s  =  67 deg/s
+#     left/right  40 deg in 0.5 s  =  80 deg/s
+#
+# These caps bound how far one command can take an axis if the plan's
+# durations are wrong. They are a backstop, not a calibration - the fix
+# for a wrong angle is a right SPEED, not a tighter cap.
+#
+# Homing does not come through here: it drives the pin directly, because
+# the whole point of driving into a stop is to overshoot.
+MAX_DRIVE_S = {"rail": 1.5, "pan": 0.5}
+MAX_TURN_S = MAX_DRIVE_S["pan"]      # what --max-turn starts from
 SETTLE_S = 0.08              # let it stop before the next command
 
 PAN_LIMIT = 90.0             # +/- from the neutral datum
@@ -329,10 +339,11 @@ def move(hw, moves, settle=SETTLE_S, max_turn=MAX_TURN_S):
         # The rail runs against a hard stop and is allowed its long homing
         # drive. Pan has no stop and no feedback, so it is capped. Tilt
         # does not come through here at all any more - it is a stepper.
-        if axis == "pan" and seconds > max_turn:
-            print(f"      {axis} {seconds:.2f}s capped to {max_turn:.2f}s "
+        cap = max_turn if axis == "pan" else MAX_DRIVE_S.get(axis)
+        if cap is not None and seconds > cap:
+            print(f"      {axis} {seconds:.2f}s capped to {cap:.2f}s "
                   f"- check SPEED['{axis}']")
-            seconds = max_turn
+            seconds = cap
         hw.drive(axis, direction)
         live.append((axis, now + seconds))
 
