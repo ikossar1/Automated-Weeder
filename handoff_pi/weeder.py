@@ -121,7 +121,9 @@ VALVE_PINS = (VALVE_OPEN_PIN, VALVE_SHUT_PIN)
 VALVE_PULSE_S = 1.0          # how long to drive it to flip, from the jog script
 
 # Set True for any axis wired so that the "forward" pin drives it backwards.
-INVERT = {"rail": False, "pan": False, "tilt": False}
+# pan swung the wrong way on the machine: a box to the left was reached
+# by turning right. Inverted here rather than by swapping the wires.
+INVERT = {"rail": False, "pan": True, "tilt": False}
 
 # Measured, not guessed. Run --calibrate-rail to get the first one.
 # How hard the DC motors are driven, as a percentage of full power.
@@ -183,6 +185,13 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # GRACE is slack for the measurements being eyeballed. A cap that sits
 # exactly on the measured figure will clip honest moves whenever the
 # real speed is a little under what was timed.
+# A hard ceiling in SECONDS on any one drive. The degree figures only
+# mean what they say if the speed estimate is right, and it is not:
+# moves that should have been a few degrees ran far past. Until each
+# axis has been timed at the duty it will really run at, this is what
+# bounds the damage, and it is deliberately short.
+MAX_DRIVE_S_HARD = 0.35
+
 MAX_DRIVE_DEG = {"pan": 10.0, "tilt": 10.0}
 
 # Above this tilt the shot is near enough vertical that pan stops
@@ -193,10 +202,15 @@ NEAR_VERTICAL_DEG = 75.0
 # How many capped drives one move may be split into. Enough to cross the
 # full range of either axis, and a bound on how long a single command can
 # keep a motor running if a speed is badly wrong.
-MAX_DRIVE_STEPS = 24
+# ONE drive per command, not a sequence of them. Splitting a move into
+# several capped drives assumed the speed estimate was roughly right, so
+# repeating until the target was reached would arrive. It is not right -
+# a single drive already overshot - and repeating drove further past.
+MAX_DRIVE_STEPS = 1
 GRACE = 1.2
 
-MAX_DRIVE_S = {a: round(MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE, 2)
+MAX_DRIVE_S = {a: min(MAX_DRIVE_S_HARD,
+                      round(MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE, 2))
                for a in MAX_DRIVE_DEG}
 MAX_TURN_S = MAX_DRIVE_S["pan"]      # what --max-turn starts from
 SETTLE_S = 0.08              # let it stop before the next command
@@ -792,9 +806,11 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
 
         want_valve = r["spray"] == "1"
 
-        # The valve closes BEFORE a move that is not meant to be spraying,
-        # and opens only once the head is already where it should be.
-        if valve_is_open and not want_valve:
+        # Shut before ANYTHING moves, not only before moves that are not
+        # meant to spray. It was staying open across a move whenever the
+        # next row also wanted it open, so the machine travelled while
+        # spraying - the one thing the travel/spray split exists to stop.
+        if valve_is_open:
             hw.valve(False)
             valve_is_open = False
 
@@ -882,6 +898,42 @@ def test_motor(hw, axis="pan", seconds=2.0):
     print("  lowering - try --duty 15.")
 
 
+def time_axis(hw, axis, seconds=1.0):
+    """
+    Drive one axis for a known time so its real speed can be worked out.
+
+    Everything downstream is a duration, and a duration is only as good
+    as the degrees-per-second it was divided by. That figure is still a
+    full-power stopwatch number scaled by the duty cycle, which is a
+    guess - and the overshoot on the machine says it is a bad one.
+    """
+    if axis not in PINS:
+        sys.exit(f"No axis {axis!r}. Try: {', '.join(PINS)}")
+
+    print("")
+    print(f"  Driving {axis} for {seconds:.2f}s at {DUTY:.0f}% power.")
+    print(f"  The code currently believes that is "
+          f"{seconds * SPEED_DEG[axis]:.1f} degrees.")
+    print("  Mark where it points now, then press Enter.")
+    try:
+        input("  > ")
+    except EOFError:
+        pass
+
+    hw.drive(axis, 1)
+    wait(hw, seconds)
+    hw.stop(axis)
+
+    print("")
+    print("  Measure how far it actually turned, then set")
+    print(f"  SPEED_DEG_FULL['{axis}'] near the top of this file to:")
+    print("")
+    print(f"      measured_degrees / {seconds:.2f} * 100 / {DUTY:.0f}")
+    print("")
+    print("  That is the figure at FULL power - the code scales it down")
+    print("  by the duty itself.")
+
+
 def rail_sweep(hw, cm=10.0):
     """
     Drive the rail a stated distance so the real steps-per-cm can be
@@ -933,6 +985,11 @@ def main():
     ap.add_argument("--test-motor", metavar="AXIS", default=None,
                     help="run one axis at 100/60/30/15%% power to check "
                          "that PWM is working")
+    ap.add_argument("--time-axis", metavar="AXIS", default=None,
+                    help="drive one axis for a known time to measure its "
+                         "real speed")
+    ap.add_argument("--drive-seconds", type=float, default=1.0,
+                    help="how long --time-axis drives for (default 1.0)")
     ap.add_argument("--rail-sweep", type=float, nargs="?", const=10.0,
                     default=None, metavar="CM",
                     help="drive the rail this far to measure "
@@ -944,6 +1001,10 @@ def main():
     try:
         if args.test_motor:
             test_motor(hw, args.test_motor)
+            return
+
+        if args.time_axis:
+            time_axis(hw, args.time_axis, args.drive_seconds)
             return
 
         if args.rail_sweep is not None:
