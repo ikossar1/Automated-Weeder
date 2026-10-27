@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import math
 import pathlib
 import signal
@@ -54,43 +55,48 @@ import time
 # wrong way - they are facts about the build, not about the maths.
 # ---------------------------------------------------------------------------
 
+# Confirmed by driving each motor and watching, not inferred from the
+# jog script's key names - which named them after arrow keys and led to
+# the wrong map twice.
 PINS = {
     #          forward pin, reverse pin
-    "rail": (23, 24),       # Motor 1 - 23 HIGH drives toward +x (right)
-    "pan":  (27, 22),       # Motor 2 - 27 HIGH rotates clockwise from above
+    "pan":  (23, 24),       # 23 HIGH swings the nozzle one way
+    "tilt": (27, 22),       # 27 HIGH tips the nozzle down
 }
 
-# Tilt is a stepper on an EasyDriver, not a DC motor.
+# The RAIL is the stepper, on an EasyDriver. The two DC motors both
+# rotate; nothing else is left to slide the head along the bed, and a
+# stepper on a leadscrew is how you would build a linear axis that has
+# to know where it is.
 #
-# This is the one axis that knows where it is. A DC motor is told to run
-# for a length of time and we hope; a stepper is told to take a number of
-# steps and it takes them. So tilt alone is immune to the speed guesses
-# that make the other two axes approximate, and none of the duration
-# machinery below - MIN_MOVE_S, MAX_TURN_S - applies to it.
-TILT_STEP_PIN = 25
-TILT_DIR_PIN = 6
-# Seconds per half pulse. With 4.44 steps/deg this sets the tilt rate:
-#     1 / (4.44 * 2 * 0.000483) = 233 deg/s
-# which is four times the jog script's 56.3 deg/s.
-#
-# That is 1036 full steps a second, and at that rate time.sleep stops
-# being usable - it cannot resolve half a millisecond and its own
-# overhead is the same size as the wait. _hold below busy-waits instead,
-# which costs a pegged CPU core for the length of a move and buys a step
-# rate that is actually what it says.
-#
-# Steppers also stall if asked to start straight into a high rate, and
-# there is no acceleration ramp here. If tilt buzzes without turning,
-# that is this number being too small, not the wiring.
-TILT_STEP_DELAY = 0.000483
+# This is the good axis. A DC motor is told to run for a length of time
+# and we hope. A stepper is told to take 400 steps and takes 400 steps,
+# so the rail does not accumulate error and does not need re-homing
+# before every box the way a timed drive did.
+RAIL_STEP_PIN = 25
+RAIL_DIR_PIN = 6
+RAIL_DIR_FORWARD = True      # True if DIR high moves away from the home stop
 
-# MEASURE THIS. The default assumes a 200 step motor driven at the
-# EasyDriver's 1/8 microstep default, turning the nozzle directly:
-#     200 * 8 = 1600 steps per turn, / 360 = 4.44 per degree
-# Any gearing between motor and nozzle multiplies it. To check: run
-# --tilt-sweep, count the degrees it actually moved, and divide.
-TILT_STEPS_PER_DEG = 4.44
-TILT_DIR_RAISES = True       # True if DIR high tilts the nozzle UP
+# MEASURE THIS with --rail-sweep.
+#
+# The default assumes a 200 step motor at the EasyDriver's 1/8 microstep
+# default on an 8 mm lead screw:
+#     200 * 8 = 1600 steps per turn, 8 mm of travel per turn
+#     = 200 steps per mm = 2000 per cm
+# A different lead changes it completely - a 2 mm lead is four times
+# this - so it is a starting point, not a number to trust.
+RAIL_STEPS_PER_CM = 2000.0
+
+# Seconds per half pulse at full speed, and where the ramp starts.
+#
+# A stepper asked to start straight into a high step rate does not turn
+# at all: it has to accelerate into it. Running at 1036 steps a second
+# from standstill is well past what a small motor will pull in, and the
+# symptom is exactly what was seen - a motor that buzzes and does not
+# move. So every move starts slow and speeds up.
+RAIL_STEP_DELAY = 0.00040        # fastest, once up to speed
+RAIL_START_DELAY = 0.0025        # first step, slow enough to pull in
+RAIL_RAMP_STEPS = 120            # steps taken getting from one to the other
 
 # The valve LATCHES. It is not a solenoid you hold open.
 #
@@ -143,8 +149,9 @@ DUTY = 15.0
 # either, because this ends in a collision every single time.
 HOME_DUTY = 70.0
 
-# Measured with a stopwatch at FULL power.
-SPEED_DEG_FULL = {"rail": 50.0, "pan": 42.86}
+# Measured with a stopwatch at FULL power, against the axes as they
+# actually are: 23/24 is pan, 27/22 is tilt.
+SPEED_DEG_FULL = {"pan": 50.0, "tilt": 42.86}
 
 # What to expect at DUTY. A DC motor is not linear in duty cycle - it
 # loses proportionally more to friction the slower it goes - so this is
@@ -152,10 +159,9 @@ SPEED_DEG_FULL = {"rail": 50.0, "pan": 42.86}
 # an axis at this duty and put the real figure in if the aim is off.
 SPEED_DEG = {a: v * DUTY / 100.0 for a, v in SPEED_DEG_FULL.items()}
 
-# rail is cm/s, used for homing and for turning plan distances into
-# durations. tilt is absent on purpose: it is a stepper, and its rate
-# comes from TILT_STEP_DELAY.
-SPEED = {"rail": 4.0 * DUTY / 100.0, "pan": SPEED_DEG["pan"]}
+# Only the DC axes have a speed in here. The rail is a stepper and its
+# rate comes from RAIL_STEP_DELAY, not from a guess about voltage.
+SPEED = {"pan": SPEED_DEG["pan"], "tilt": SPEED_DEG["tilt"]}
 SPRAY_PATCH_CM = 5.1         # 2 inches, measured off the airbrush
 WORKING_RANGE_CM = 20.0      # typical nozzle-to-soil distance
 
@@ -177,7 +183,7 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # GRACE is slack for the measurements being eyeballed. A cap that sits
 # exactly on the measured figure will clip honest moves whenever the
 # real speed is a little under what was timed.
-MAX_DRIVE_DEG = {"rail": 10.0, "pan": 10.0}
+MAX_DRIVE_DEG = {"pan": 10.0, "tilt": 10.0}
 
 # Above this tilt the shot is near enough vertical that pan stops
 # mattering: the nozzle is looking almost straight down, so swinging it
@@ -185,7 +191,7 @@ MAX_DRIVE_DEG = {"rail": 10.0, "pan": 10.0}
 NEAR_VERTICAL_DEG = 75.0
 GRACE = 1.2
 
-MAX_DRIVE_S = {a: MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE
+MAX_DRIVE_S = {a: round(MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE, 2)
                for a in MAX_DRIVE_DEG}
 MAX_TURN_S = MAX_DRIVE_S["pan"]      # what --max-turn starts from
 SETTLE_S = 0.08              # let it stop before the next command
@@ -230,8 +236,9 @@ class Hardware:
         self.log = log if log is not None else []
         self.gpio = None
         self.pwm = {}
-        # Where the stepper believes it is, in degrees from the datum.
-        self.tilt_deg = 0.0
+        # Where the stepper believes the head is, in cm from the home
+        # stop. Set by homing, then kept by counting steps.
+        self.rail_cm = 0.0
         # True until proven otherwise, so the first all_off really pulses
         # it shut instead of deciding there is nothing to do.
         self.valve_open = True
@@ -269,7 +276,7 @@ class Hardware:
         # the level should be skips the read - and starting every pin low
         # is what we want anyway, since low is motors stopped, valve shut.
         pins = ([n for pair in PINS.values() for n in pair]
-                + list(VALVE_PINS) + [TILT_STEP_PIN, TILT_DIR_PIN])
+                + list(VALVE_PINS) + [RAIL_STEP_PIN, RAIL_DIR_PIN])
         for pin in pins:
             try:
                 GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
@@ -344,37 +351,52 @@ class Hardware:
         self.log.append(("valve", "open" if on else "shut"))
         return VALVE_PULSE_S
 
-    def tilt_to(self, degrees):
+    def rail_to(self, cm):
         """
-        Step the nozzle to an absolute angle.
+        Step the head to an absolute position along the bed.
 
-        Absolute, not relative, because a stepper can hold a true position
-        and there is no reason to accumulate error on the one axis that
-        does not have to. The datum set at the start of the run is what
-        this counts from.
+        Absolute, not relative, because a stepper holds a true position
+        and there is no reason to let error pile up on the one axis that
+        does not have to have any.
+
+        Every move accelerates. A stepper told to start at full rate
+        does not turn - it has to be brought up to speed - and the
+        symptom of getting that wrong is a motor that buzzes and sits
+        still, which looks like a wiring fault and is not one.
         """
-        delta = degrees - self.tilt_deg
-        steps = int(round(delta * TILT_STEPS_PER_DEG))
+        delta = cm - self.rail_cm
+        steps = int(round(delta * RAIL_STEPS_PER_CM))
         if steps == 0:
             return 0.0
 
-        up = (steps > 0) == TILT_DIR_RAISES
-        self._write(TILT_DIR_PIN, up)
-        took = abs(steps) * TILT_STEP_DELAY * 2
+        forward = (steps > 0) == RAIL_DIR_FORWARD
+        self._write(RAIL_DIR_PIN, forward)
+        n = abs(steps)
+        took = 0.0
 
         if not self.dry:
             time.sleep(0.001)
-            for _ in range(abs(steps)):
-                self._write(TILT_STEP_PIN, True)
-                _hold(TILT_STEP_DELAY)
-                self._write(TILT_STEP_PIN, False)
-                _hold(TILT_STEP_DELAY)
+            for i in range(n):
+                # Ramp up over the first RAIL_RAMP_STEPS, and back down
+                # over the last of them, so it neither stalls starting
+                # nor overruns stopping.
+                near = min(i, n - 1 - i, RAIL_RAMP_STEPS)
+                if near >= RAIL_RAMP_STEPS:
+                    d = RAIL_STEP_DELAY
+                else:
+                    f = near / RAIL_RAMP_STEPS
+                    d = RAIL_START_DELAY + (RAIL_STEP_DELAY
+                                            - RAIL_START_DELAY) * f
+                self._write(RAIL_STEP_PIN, True)
+                _hold(d)
+                self._write(RAIL_STEP_PIN, False)
+                _hold(d)
+                took += 2 * d
+        else:
+            took = n * 2 * RAIL_STEP_DELAY
 
-        # Only the rounding is lost, and it is lost once rather than
-        # compounding, because the next move is worked out from where we
-        # actually are.
-        self.tilt_deg += steps / TILT_STEPS_PER_DEG
-        self.log.append(("tilt", round(self.tilt_deg, 2)))
+        self.rail_cm += steps / RAIL_STEPS_PER_CM
+        self.log.append(("rail", round(self.rail_cm, 3)))
         return took
 
     def all_off(self):
@@ -388,7 +410,7 @@ class Hardware:
         self.valve(False, force=True)
         for axis in PINS:
             self.stop(axis)
-        self._write(TILT_STEP_PIN, False)
+        self._write(RAIL_STEP_PIN, False)
 
     def cleanup(self):
         """
@@ -410,11 +432,17 @@ class Hardware:
         finally:
             if old is not None:
                 signal.signal(signal.SIGINT, old)
+        # Stop and drop the PWM objects BEFORE closing the chip. Left
+        # alive, their __del__ runs afterwards and calls into a handle
+        # that is already None, which prints a stack trace at exit that
+        # looks like a crash and is not one.
         for pwm in self.pwm.values():
             try:
                 pwm.stop()
             except Exception:
                 pass
+        self.pwm.clear()
+        gc.collect()
         if not self.dry and self.gpio:
             self.gpio.cleanup()
 
@@ -465,19 +493,22 @@ def move(hw, moves, settle=SETTLE_S, max_turn=MAX_TURN_S):
 
 def home_rail(hw):
     """
-    Drive into the stop and stay there long enough to be certain.
+    Drive into the stop once, and call that zero.
 
-    Overshoot is the point: whatever position it started from, it finishes
-    pressed against the stop. That is the one position this machine can
-    know exactly.
+    With a DC rail this had to happen before every box, because a timed
+    drive drifts and the stop was the only position the machine could
+    know. The rail is a stepper now: it holds its count, so homing is a
+    once-per-run job and the 17 seconds a box it used to cost is gone.
+
+    Stepping into a hard stop makes the motor skip steps, which is
+    exactly what is wanted here - it ends up pressed against the stop
+    whatever it did on the way.
     """
-    speed = SPEED["rail"] * (HOME_DUTY / DUTY)
-    seconds = (RAIL_TRAVEL_CM / speed) * HOME_EXTRA
-    print(f"    homing rail  ({seconds:.1f}s against the stop "
-          f"at {HOME_DUTY:.0f}% power)")
-    hw.drive("rail", -1, duty=HOME_DUTY)
-    wait(hw, seconds)
-    hw.stop("rail")
+    cm = RAIL_TRAVEL_CM * HOME_EXTRA
+    print(f"    homing rail  (driving {cm:.0f} cm into the stop)")
+    hw.rail_cm = cm                 # pretend we are at the far end ...
+    hw.rail_to(0.0)                 # ... so this drives the whole way back
+    hw.rail_cm = 0.0                # and the stop is zero by definition
     wait(hw, SETTLE_S * 3)
 
 
@@ -522,26 +553,26 @@ def skipped_cost():
     and the longest move that can be skipped is MIN_MOVE_S at full speed,
     so the worst case is a fixed number rather than a guess.
     """
-    straight = SPEED["rail"] * MIN_MOVE_S
-    turn = SPEED["pan"] * MIN_MOVE_S
-    swung = WORKING_RANGE_CM * math.tan(math.radians(turn))
-    return max(straight, swung)
+    # Only pan and tilt can be skipped. The rail is a stepper and takes
+    # whatever steps it is given, however few.
+    turn = max(SPEED["pan"], SPEED["tilt"]) * MIN_MOVE_S
+    return WORKING_RANGE_CM * math.tan(math.radians(turn))
 
 
 def summarise(rows):
     short = sum(1 for r in rows
                 if 0 < max(float(r["rail_secs"]), float(r["pan_secs"]),
                            float(r["tilt_secs"])) < MIN_MOVE_S)
-    # Tilt no longer takes the time the plan guessed for a DC motor: it
-    # takes however long its pulses take, which is a known number.
-    tilt_at = 0.0
+    # The rail is a stepper: its time is a count of pulses, not a guess
+    # about how fast a DC motor turns.
+    rail_at = 0.0
     total = 0.0
     for r in rows:
-        want = float(r["tilt_deg"])
-        steps = abs(int(round((want - tilt_at) * TILT_STEPS_PER_DEG)))
-        tilt_at += steps / TILT_STEPS_PER_DEG if want >= tilt_at else -steps / TILT_STEPS_PER_DEG
-        total += (steps * TILT_STEP_DELAY * 2
-                  + max(float(r["rail_secs"]), float(r["pan_secs"]))
+        want = float(r["rail_cm"])
+        steps = abs(int(round((want - rail_at) * RAIL_STEPS_PER_CM)))
+        rail_at = want
+        total += (steps * RAIL_STEP_DELAY * 2
+                  + max(float(r["pan_secs"]), float(r["tilt_secs"]))
                   + SETTLE_S)
     # The valve starts shut, so the first spraying row is itself a change.
     # Counting only row-to-row transitions reported 0 changes for a plan
@@ -556,15 +587,17 @@ def summarise(rows):
             changes += 1
             state = s
     boxes = len({r.get("box") for r in rows})
-    homing = RAIL_TRAVEL_CM / SPEED["rail"] * HOME_EXTRA
+    homing = (RAIL_TRAVEL_CM * HOME_EXTRA * RAIL_STEPS_PER_CM
+              * RAIL_STEP_DELAY * 2)
 
     print(f"  Rows            : {len(rows):,}")
     print(f"  Boxes           : {boxes}")
     print(f"  Spraying on     : {on_rows} of {len(rows)} rows")
     print(f"  Valve changes   : {changes}")
     print(f"  Driving         : {total:.0f} s")
-    print(f"  Homing          : {boxes} x {homing:.0f} s = {boxes * homing:.0f} s")
-    print(f"  Rough total     : {(total + boxes * homing) / 60:.1f} min")
+    print(f"  Homing          : once, {homing:.0f} s "
+          f"(the rail is a stepper and holds its place)")
+    print(f"  Rough total     : {(total + homing) / 60:.1f} min")
 
     # A plan where the valve never opens will drive every motor, take the
     # full run time and lay no mulch at all. That is the quietest way this
@@ -714,10 +747,10 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
         # Tilt first, and on its own. Stepping is a tight pulse loop that
         # cannot share the clock with a timed DC move, and the stepper is
         # exact, so there is nothing to gain from overlapping them.
-        took = hw.tilt_to(float(r["tilt_deg"]))
+        took = hw.rail_to(float(r["rail_cm"]))
         took += move(hw, [
-            ("rail", int(r["rail_dir"]), float(r["rail_secs"])),
             ("pan",  pan_dir, pan_secs),
+            ("tilt", int(r["tilt_dir"]), float(r["tilt_secs"])),
         ], max_turn=max_turn)
 
         if want_valve and not valve_is_open:
@@ -773,54 +806,31 @@ def test_motor(hw, axis="pan", seconds=2.0):
     print("  lowering - try --duty 15.")
 
 
-def tilt_sweep(hw, degrees=90.0):
+def rail_sweep(hw, cm=10.0):
     """
-    Drive the tilt a stated angle so the real steps-per-degree can be
-    measured. Mark where the nozzle points, run it, measure where it
-    ended up, then set TILT_STEPS_PER_DEG to:
+    Drive the rail a stated distance so the real steps-per-cm can be
+    measured. Mark where the head is, run it, measure how far it went:
 
-        current value  *  (degrees asked for / degrees actually moved)
+        RAIL_STEPS_PER_CM  *  (cm asked for / cm actually moved)
     """
-    print(f"  Tilt sweep: asking for {degrees:.0f} degrees at "
-          f"{TILT_STEPS_PER_DEG:.2f} steps/deg")
-    print(f"  = {int(round(degrees * TILT_STEPS_PER_DEG))} steps")
-    print("  Mark where the nozzle points now, then press Enter.")
+    steps = int(round(cm * RAIL_STEPS_PER_CM))
+    print(f"  Rail sweep: asking for {cm:.1f} cm at "
+          f"{RAIL_STEPS_PER_CM:.0f} steps/cm = {steps:,} steps")
+    print("  Mark where the head is now, then press Enter.")
     try:
         input("  > ")
     except EOFError:
         pass
-    hw.tilt_to(hw.tilt_deg + degrees)
+    at = hw.rail_cm
+    hw.rail_to(at + cm)
     print("")
-    print("  Measure the angle it actually moved through, then set")
-    print("  TILT_STEPS_PER_DEG near the top of this file to:")
+    print("  Measure how far it actually moved, then set")
+    print("  RAIL_STEPS_PER_CM near the top of this file to:")
     print("")
-    print(f"      {TILT_STEPS_PER_DEG:.2f} * ({degrees:.0f} / measured)")
+    print(f"      {RAIL_STEPS_PER_CM:.0f} * ({cm:.1f} / measured)")
     print("")
-    print("  Until that is done every tilt angle in the plan is a guess.")
-
-
-def calibrate_rail(hw):
-    """Time a full traverse. This is the only speed number that is measured."""
-    print("\nRail calibration")
-    print("  It will home, then drive the full length. Time how long the")
-    print("  carriage is actually moving, and stop it with Ctrl+C when it")
-    print("  reaches the far stop.\n")
-    input("  Enter to start...")
-
-    home_rail(hw)
-    print(f"\n  Driving out. Watch it. Ctrl+C when it reaches the far end.")
-    start = time.monotonic()
-    hw.drive("rail", +1)
-    try:
-        time.sleep(RAIL_TRAVEL_CM / SPEED["rail"] * 2)
-    except KeyboardInterrupt:
-        pass
-    took = time.monotonic() - start
-    hw.stop("rail")
-
-    print(f"\n  {RAIL_TRAVEL_CM:.0f} cm in {took:.2f} s")
-    print(f"  -> SPEED['rail'] = {RAIL_TRAVEL_CM / took:.2f}   (cm per second)")
-    print(f"\n  Put that at the top of this file.")
+    print("  If it buzzed without moving, the step rate is too high to")
+    print("  start from standstill: raise RAIL_START_DELAY.")
 
 
 def main():
@@ -844,12 +854,10 @@ def main():
     ap.add_argument("--test-motor", metavar="AXIS", default=None,
                     help="run one axis at 100/60/30/15%% power to check "
                          "that PWM is working")
-    ap.add_argument("--tilt-sweep", type=float, nargs="?", const=90.0,
-                    default=None, metavar="DEG",
-                    help="drive the tilt this many degrees to measure "
-                         "TILT_STEPS_PER_DEG (default 90)")
-    ap.add_argument("--calibrate-rail", action="store_true",
-                    help="time a full traverse to measure the rail speed")
+    ap.add_argument("--rail-sweep", type=float, nargs="?", const=10.0,
+                    default=None, metavar="CM",
+                    help="drive the rail this far to measure "
+                         "RAIL_STEPS_PER_CM (default 10)")
     args = ap.parse_args()
 
     hw = Hardware(dry=args.dry_run, real_time=args.real_time)
@@ -859,13 +867,10 @@ def main():
             test_motor(hw, args.test_motor)
             return
 
-        if args.tilt_sweep is not None:
-            tilt_sweep(hw, args.tilt_sweep)
+        if args.rail_sweep is not None:
+            rail_sweep(hw, args.rail_sweep)
             return
 
-        if args.calibrate_rail:
-            calibrate_rail(hw)
-            return
 
         path = pathlib.Path(args.commands)
         if not path.exists():
