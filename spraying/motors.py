@@ -369,7 +369,10 @@ def export_dc(plan_json, head=None, out_csv="dc_commands.csv"):
     for each axis so an open-loop build has something to work with.
     """
     head = head or DEFAULT_DC_HEAD
-    plan = json.loads(pathlib.Path(plan_json).read_text())
+    # A dict is accepted as well as a path, so a caller holding a plan
+    # it just built does not have to write it out and read it back.
+    plan = (plan_json if isinstance(plan_json, dict)
+            else json.loads(pathlib.Path(plan_json).read_text()))
 
     fields = ["i", "box", "rail_cm", "pan_deg", "tilt_deg",
               "rail_counts", "pan_counts", "tilt_counts",

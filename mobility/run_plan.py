@@ -151,6 +151,10 @@ class Hardware:
 
         if dry:
             print("  DRY RUN - no pins are touched\n")
+            # Establish the same known state a real run starts from,
+            # or the valve would still be assumed open and every
+            # open command skipped as a no-op.
+            self.all_off()
             return
 
         try:

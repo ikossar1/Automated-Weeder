@@ -876,7 +876,13 @@ def reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max):
 
 
 def report_reach(bed, rail, height, throw, tilt_min, tilt_max):
-    """Say up front how much of the bed is out of range, and why."""
+    """
+    Say up front how much of the bed is out of range, and why.
+
+    Shares reach_advice with the planner rather than keeping a second
+    copy: the advice has been wrong once already by being worked out two
+    different ways in two places.
+    """
     r = reach_into_bed(bed, rail, height, throw, tilt_min, tilt_max)
     axis = "x" if rail["axis"] == "y" else "y"
 
@@ -890,20 +896,8 @@ def report_reach(bed, rail, height, throw, tilt_min, tilt_max):
 
     if r["short"] > 0.5:
         print("")
-        print(f"    The far {r['short']:.1f} cm cannot be sprayed from this")
-        print(f"    side. Boxes out there will plan zero points. To fix it,")
-        print(f"    any one of:")
-        need = math.hypot(r["width"] + r["standoff"], height)
-        print(f"      - move the rail to the bed edge "
-              f"(saves {r['standoff']:.1f} cm)")
-        lower = math.sqrt(max(0.0, throw ** 2 - 8.0 ** 2)) - r["standoff"]
-        print(f"      - drop the nozzle to 8 cm "
-              f"(reaches {lower:.1f} cm instead of {r['into']:.1f} cm)")
-        print(f"      - a throw of {need:.1f} cm to cover it as mounted")
-        print(f"      - spray the far side from the other end of the bed")
+        reach_advice(r, height, throw, tilt_min)
     return r
-
-
 
 
 def best_height(throw, tilt_min_deg):

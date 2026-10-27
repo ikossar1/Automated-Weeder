@@ -48,7 +48,10 @@ import simulate as S
 try:
     import cv2
 except ImportError:
-    sys.exit("This needs OpenCV:\n    python -m pip install opencv-python")
+    # Only the clicking needs OpenCV. Everything else in here -
+    # working out the boxes, planning a route through one - is
+    # arithmetic, and the Pi runs it over SSH with no display.
+    cv2 = None
 
 HERE = pathlib.Path(__file__).parent
 MAPS = HERE.parent / "mapping" / "maps"
@@ -218,6 +221,11 @@ class Board:
 
 
 def choose_boxes(bed, cells, plants):
+    if cv2 is None:
+        sys.exit("Clicking boxes needs OpenCV:"
+                 + chr(10) + "    sudo apt install python3-opencv"
+                 + chr(10) + "Or use mobility/pick_and_go.py, "
+                 + "which needs no window.")
     board = Board(bed, cells, plants)
     win = "Click the boxes to spray"
     state = {"done": False, "cancel": False}
