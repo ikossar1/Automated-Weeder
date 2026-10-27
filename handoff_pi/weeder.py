@@ -189,6 +189,11 @@ MAX_DRIVE_DEG = {"pan": 10.0, "tilt": 10.0}
 # mattering: the nozzle is looking almost straight down, so swinging it
 # left or right moves the landing point by very little.
 NEAR_VERTICAL_DEG = 75.0
+
+# How many capped drives one move may be split into. Enough to cross the
+# full range of either axis, and a bound on how long a single command can
+# keep a motor running if a speed is badly wrong.
+MAX_DRIVE_STEPS = 24
 GRACE = 1.2
 
 MAX_DRIVE_S = {a: round(MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE, 2)
@@ -239,6 +244,11 @@ class Hardware:
         # Where the stepper believes the head is, in cm from the home
         # stop. Set by homing, then kept by counting steps.
         self.rail_cm = 0.0
+        # Where the two DC axes are believed to be, in degrees from the
+        # datum set by hand at the start of the run. Believed, not known:
+        # nothing measures them, so this is the running total of what
+        # they were told to do.
+        self.angle = {"pan": 0.0, "tilt": 0.0}
         # True until proven otherwise, so the first all_off really pulses
         # it shut instead of deciding there is nothing to do.
         self.valve_open = True
@@ -350,6 +360,53 @@ class Hardware:
         self.valve_open = on
         self.log.append(("valve", "open" if on else "shut"))
         return VALVE_PULSE_S
+
+    def turn_to(self, axis, degrees, max_turn=None):
+        """
+        Drive a DC axis to an absolute angle, not by a relative nudge.
+
+        The plan only ever stated differences between consecutive rows,
+        which silently assumed the machine already sat at the first row's
+        angles. It does not: it sits at the datum. So the first move of a
+        box - the big one, from neutral out to the aim point - was never
+        commanded and nothing appeared to happen.
+
+        Working from an absolute target fixes that, and lets the duration
+        come from the speed measured on this machine rather than from
+        whatever the planner assumed.
+        """
+        cap = max_turn if (max_turn and axis == "pan") else MAX_DRIVE_S[axis]
+        want = degrees - self.angle[axis]
+        if abs(want) < 0.05:
+            return 0.0
+
+        # The cap limits how long ONE drive may run, not how far the axis
+        # may travel. A legitimate 80 degree swing from the datum is made
+        # of several capped drives, not abandoned after the first - and
+        # pausing between them is what keeps a runaway short.
+        took = 0.0
+        for _ in range(MAX_DRIVE_STEPS):
+            delta = degrees - self.angle[axis]
+            secs = abs(delta) / SPEED_DEG[axis]
+            if secs < MIN_MOVE_S:
+                break
+            secs = min(secs, cap)
+
+            way = 1 if delta > 0 else -1
+            self.drive(axis, way)
+            wait(self, secs)
+            self.stop(axis)
+            wait(self, SETTLE_S)
+            self.angle[axis] += way * secs * SPEED_DEG[axis]
+            took += secs + SETTLE_S
+
+        left = degrees - self.angle[axis]
+        if abs(left) > 1.0:
+            print(f"      {axis} stopped {abs(left):.0f} deg short of "
+                  f"{degrees:.0f} - raise MAX_DRIVE_STEPS or the duty")
+        elif took:
+            print(f"      {axis} -> {degrees:+.0f} deg in {took:.1f}s")
+        return took
 
     def rail_to(self, cm):
         """
@@ -524,6 +581,8 @@ def ask_datum():
     print("\nWithin about 3 degrees is fine - the spray pattern covers that.")
     print("Past 5 and it starts missing the box it aimed at.")
     answer = input("\nBoth set? (yes / no): ").strip().lower()
+    # From here the believed angles are zero, by definition - the datum
+    # is wherever the operator has just put them.
     if answer not in ("y", "yes"):
         sys.exit("\nStopped. Nothing moved.")
     print()
@@ -749,16 +808,14 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
         # essentially the same place either way. Swinging the head round
         # to honour that is wasted travel and wasted accuracy, so when
         # the shot is near vertical the pan is left where it is.
-        pan_dir = int(r["pan_dir"])
-        pan_secs = float(r["pan_secs"])
-        pan_now = float(r["pan_deg"])
-        if (last_pan is not None and abs(pan_now - last_pan) > 120.0
+        pan_want = float(r["pan_deg"])
+        if (last_pan is not None and abs(pan_want - last_pan) > 120.0
                 and float(r["tilt_deg"]) > NEAR_VERTICAL_DEG):
-            print(f"      pan flip of {abs(pan_now - last_pan):.0f} deg "
+            print(f"      pan flip of {abs(pan_want - last_pan):.0f} deg "
                   f"ignored - spraying near vertical")
-            pan_dir, pan_secs = 0, 0.0
+            pan_want = None
         else:
-            last_pan = pan_now
+            last_pan = pan_want
 
         # Tilt first, and on its own. Stepping is a tight pulse loop that
         # cannot share the clock with a timed DC move, and the stepper is
@@ -768,10 +825,9 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
         # wrong on purpose - it is for watching pan and tilt behave, not
         # for spraying a bed.
         took = hw.rail_to(float(r["rail_cm"])) if use_rail else 0.0
-        took += move(hw, [
-            ("pan",  pan_dir, pan_secs),
-            ("tilt", int(r["tilt_dir"]), float(r["tilt_secs"])),
-        ], max_turn=max_turn)
+        if pan_want is not None:
+            took += hw.turn_to("pan", pan_want, max_turn)
+        took += hw.turn_to("tilt", float(r["tilt_deg"]))
 
         if want_valve and not valve_is_open:
             hw.valve(True)
