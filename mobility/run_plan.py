@@ -55,11 +55,39 @@ import time
 
 PINS = {
     #          forward pin, reverse pin
-    "rail": (23, 24),       # Motor 1 - IN1 HIGH drives toward +x (right)
-    "pan":  (27, 22),       # Motor 2 - IN3 HIGH rotates clockwise from above
-    "tilt": (5, 6),         # Motor 3 - IN5 HIGH raises the nozzle (longer shot)
+    "rail": (23, 24),       # Motor 1 - 23 HIGH drives toward +x (right)
+    "pan":  (27, 22),       # Motor 2 - 27 HIGH rotates clockwise from above
 }
-VALVE_PIN = 13
+
+# Tilt is a stepper on an EasyDriver, not a DC motor.
+#
+# This is the one axis that knows where it is. A DC motor is told to run
+# for a length of time and we hope; a stepper is told to take a number of
+# steps and it takes them. So tilt alone is immune to the speed guesses
+# that make the other two axes approximate, and none of the duration
+# machinery below - MIN_MOVE_S, MAX_TURN_S - applies to it.
+TILT_STEP_PIN = 25
+TILT_DIR_PIN = 6
+TILT_STEP_DELAY = 0.002      # seconds per half pulse, from the jog script
+
+# MEASURE THIS. The default assumes a 200 step motor driven at the
+# EasyDriver's 1/8 microstep default, turning the nozzle directly:
+#     200 * 8 = 1600 steps per turn, / 360 = 4.44 per degree
+# Any gearing between motor and nozzle multiplies it. To check: run
+# --tilt-sweep, count the degrees it actually moved, and divide.
+TILT_STEPS_PER_DEG = 4.44
+TILT_DIR_RAISES = True       # True if DIR high tilts the nozzle UP
+
+# The valve sits on two pins through an H-bridge channel, not one pin.
+#
+# Driving 26 high with 5 low energises it; both low releases it. That is
+# a spring-return valve: it shuts by itself when power is removed, which
+# is the behaviour this code relies on to fail safe.
+#
+# If yours is a latching valve - one that stays put after a pulse - this
+# is WRONG and it will never close. Check by opening it and cutting
+# power: a spring-return shuts, a latching one does not.
+VALVE_PINS = (26, 5)
 
 # Set True for any axis wired so that the "forward" pin drives it backwards.
 INVERT = {"rail": False, "pan": False, "tilt": False}
@@ -103,6 +131,8 @@ class Hardware:
         self.real_time = real_time or not dry
         self.log = log if log is not None else []
         self.gpio = None
+        # Where the stepper believes it is, in degrees from the datum.
+        self.tilt_deg = 0.0
 
         if dry:
             print("  DRY RUN - no pins are touched\n")
@@ -131,7 +161,8 @@ class Hardware:
         # fails outright if the line is not already allocated. Saying what
         # the level should be skips the read - and starting every pin low
         # is what we want anyway, since low is motors stopped, valve shut.
-        pins = [n for pair in PINS.values() for n in pair] + [VALVE_PIN]
+        pins = ([n for pair in PINS.values() for n in pair]
+                + list(VALVE_PINS) + [TILT_STEP_PIN, TILT_DIR_PIN])
         for pin in pins:
             try:
                 GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
@@ -161,8 +192,43 @@ class Hardware:
         self.drive(axis, 0)
 
     def valve(self, on):
-        self._write(VALVE_PIN, on)
+        energise, other = VALVE_PINS
+        self._write(other, False)
+        self._write(energise, on)
         self.log.append(("valve", "open" if on else "shut"))
+
+    def tilt_to(self, degrees):
+        """
+        Step the nozzle to an absolute angle.
+
+        Absolute, not relative, because a stepper can hold a true position
+        and there is no reason to accumulate error on the one axis that
+        does not have to. The datum set at the start of the run is what
+        this counts from.
+        """
+        delta = degrees - self.tilt_deg
+        steps = int(round(delta * TILT_STEPS_PER_DEG))
+        if steps == 0:
+            return 0.0
+
+        up = (steps > 0) == TILT_DIR_RAISES
+        self._write(TILT_DIR_PIN, up)
+        took = abs(steps) * TILT_STEP_DELAY * 2
+
+        if not self.dry:
+            time.sleep(0.001)
+            for _ in range(abs(steps)):
+                self._write(TILT_STEP_PIN, True)
+                time.sleep(TILT_STEP_DELAY)
+                self._write(TILT_STEP_PIN, False)
+                time.sleep(TILT_STEP_DELAY)
+
+        # Only the rounding is lost, and it is lost once rather than
+        # compounding, because the next move is worked out from where we
+        # actually are.
+        self.tilt_deg += steps / TILT_STEPS_PER_DEG
+        self.log.append(("tilt", round(self.tilt_deg, 2)))
+        return took
 
     def all_off(self):
         """Valve first, always. See the note at the top of this file."""
@@ -199,8 +265,9 @@ def move(hw, moves, settle=SETTLE_S, max_turn=MAX_TURN_S):
             print(f"      {axis} {seconds:.3f}s - too short to drive, holding")
             continue
         # The rail runs against a hard stop and is allowed its long homing
-        # drive. Pan and tilt have no stop, so they are capped.
-        if axis in ("pan", "tilt") and seconds > max_turn:
+        # drive. Pan has no stop and no feedback, so it is capped. Tilt
+        # does not come through here at all any more - it is a stepper.
+        if axis == "pan" and seconds > max_turn:
             print(f"      {axis} {seconds:.2f}s capped to {max_turn:.2f}s "
                   f"- check SPEED['{axis}']")
             seconds = max_turn
@@ -239,6 +306,8 @@ def ask_datum():
     print("SET THE NEUTRAL DATUM")
     print("=" * 62)
     print("Pan and tilt have no stop, so they cannot find zero on their own.")
+    print("Tilt is a stepper and will hold whatever you set here all run;")
+    print("pan is a plain motor and drifts, so it is the one to watch.")
     print("\n  Set PAN  to its neutral mark  (straight across the bed)")
     print("  Set TILT to its neutral mark")
     print("\nWithin about 3 degrees is fine - the spray pattern covers that.")
@@ -283,8 +352,17 @@ def summarise(rows):
     short = sum(1 for r in rows
                 if 0 < max(float(r["rail_secs"]), float(r["pan_secs"]),
                            float(r["tilt_secs"])) < MIN_MOVE_S)
-    total = sum(max(float(r["rail_secs"]), float(r["pan_secs"]),
-                    float(r["tilt_secs"])) + SETTLE_S for r in rows)
+    # Tilt no longer takes the time the plan guessed for a DC motor: it
+    # takes however long its pulses take, which is a known number.
+    tilt_at = 0.0
+    total = 0.0
+    for r in rows:
+        want = float(r["tilt_deg"])
+        steps = abs(int(round((want - tilt_at) * TILT_STEPS_PER_DEG)))
+        tilt_at += steps / TILT_STEPS_PER_DEG if want >= tilt_at else -steps / TILT_STEPS_PER_DEG
+        total += (steps * TILT_STEP_DELAY * 2
+                  + max(float(r["rail_secs"]), float(r["pan_secs"]))
+                  + SETTLE_S)
     # The valve starts shut, so the first spraying row is itself a change.
     # Counting only row-to-row transitions reported 0 changes for a plan
     # that sprays from the first row to the last, which reads as "nothing
@@ -435,10 +513,13 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
             continue
         skipping = None
 
-        took = move(hw, [
+        # Tilt first, and on its own. Stepping is a tight pulse loop that
+        # cannot share the clock with a timed DC move, and the stepper is
+        # exact, so there is nothing to gain from overlapping them.
+        took = hw.tilt_to(float(r["tilt_deg"]))
+        took += move(hw, [
             ("rail", int(r["rail_dir"]), float(r["rail_secs"])),
             ("pan",  int(r["pan_dir"]),  float(r["pan_secs"])),
-            ("tilt", int(r["tilt_dir"]), float(r["tilt_secs"])),
         ], max_turn=max_turn)
 
         if want_valve and not valve_is_open:
@@ -455,6 +536,32 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S, confirm=False):
     if valve_is_open:
         hw.valve(False)
     print(f"\n  Finished in {time.monotonic() - t0:.0f} s")
+
+
+def tilt_sweep(hw, degrees=90.0):
+    """
+    Drive the tilt a stated angle so the real steps-per-degree can be
+    measured. Mark where the nozzle points, run it, measure where it
+    ended up, then set TILT_STEPS_PER_DEG to:
+
+        current value  *  (degrees asked for / degrees actually moved)
+    """
+    print(f"  Tilt sweep: asking for {degrees:.0f} degrees at "
+          f"{TILT_STEPS_PER_DEG:.2f} steps/deg")
+    print(f"  = {int(round(degrees * TILT_STEPS_PER_DEG))} steps")
+    print("  Mark where the nozzle points now, then press Enter.")
+    try:
+        input("  > ")
+    except EOFError:
+        pass
+    hw.tilt_to(hw.tilt_deg + degrees)
+    print("")
+    print("  Measure the angle it actually moved through, then set")
+    print("  TILT_STEPS_PER_DEG near the top of this file to:")
+    print("")
+    print(f"      {TILT_STEPS_PER_DEG:.2f} * ({degrees:.0f} / measured)")
+    print("")
+    print("  Until that is done every tilt angle in the plan is a guess.")
 
 
 def calibrate_rail(hw):
@@ -499,6 +606,10 @@ def main():
     ap.add_argument("--max-turn", type=float, default=MAX_TURN_S,
                     help=f"longest single pan or tilt drive, seconds "
                          f"(default {MAX_TURN_S})")
+    ap.add_argument("--tilt-sweep", type=float, nargs="?", const=90.0,
+                    default=None, metavar="DEG",
+                    help="drive the tilt this many degrees to measure "
+                         "TILT_STEPS_PER_DEG (default 90)")
     ap.add_argument("--calibrate-rail", action="store_true",
                     help="time a full traverse to measure the rail speed")
     args = ap.parse_args()
@@ -506,6 +617,10 @@ def main():
     hw = Hardware(dry=args.dry_run, real_time=args.real_time)
 
     try:
+        if args.tilt_sweep is not None:
+            tilt_sweep(hw, args.tilt_sweep)
+            return
+
         if args.calibrate_rail:
             calibrate_rail(hw)
             return
