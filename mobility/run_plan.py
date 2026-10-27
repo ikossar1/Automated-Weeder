@@ -784,7 +784,7 @@ def choose_boxes(rows):
 
 
 def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
-        confirm=False, use_rail=True):
+        confirm=False, use_rail=True, tilt_bias=0.0):
     valve_is_open = False
     last_box = None
     last_pan = None
@@ -857,7 +857,13 @@ def run(hw, rows, rehome_every_box=True, max_turn=MAX_TURN_S,
         took = hw.rail_to(float(r["rail_cm"])) if use_rail else 0.0
         if pan_want is not None:
             took += hw.turn_to("pan", pan_want, max_turn)
-        took += hw.turn_to("tilt", float(r["tilt_deg"]))
+        # tilt_bias tips everything further down, for when the mount's
+        # mechanical zero is not where the geometry assumes. The maths
+        # gives the angle from the nozzle to the soil; if the nozzle
+        # sits a few degrees up from that in reality, every shot lands
+        # long by the same amount, and one offset fixes all of them.
+        want_tilt = min(float(r["tilt_deg"]) + tilt_bias, TILT_LIMIT)
+        took += hw.turn_to("tilt", want_tilt)
 
         if want_valve and not valve_is_open:
             hw.valve(True)

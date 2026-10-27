@@ -205,6 +205,9 @@ def main(argv=None):
                     metavar="SEC", help="longest one drive may run")
     ap.add_argument("--drive-steps", type=int, default=RP.MAX_DRIVE_STEPS,
                     help="how many drives one move may be split into")
+    ap.add_argument("--tilt-down", type=float, default=0.0, metavar="DEG",
+                    help="tip every shot this many degrees further down, "
+                         "to correct a mount whose zero is not level")
     ap.add_argument("--one-shot", action="store_true",
                     help="aim once at the centre of the box instead of "
                          "covering it, so the movement is easy to follow")
@@ -303,6 +306,9 @@ def main(argv=None):
                           for a in RP.MAX_DRIVE_DEG}
         print(f"  Motor power: {args.duty:.0f}%  -> pan "
               f"{RP.SPEED_DEG['pan']:.1f} deg/s")
+
+    if args.tilt_down:
+        print(f"  Every shot tipped {args.tilt_down:.0f} deg further down.")
 
     if args.no_rail:
         print(f"  Rail OFF - head fixed at x={rail['fixed']:.1f}, "
@@ -468,7 +474,8 @@ def main(argv=None):
                 continue
 
             RP.run(hw, rows, rehome_every_box=True,
-                   max_turn=args.max_turn, use_rail=False)
+                   max_turn=args.max_turn, use_rail=False,
+                   tilt_bias=args.tilt_down)
             history.append((cell["name"], float(rows[-1]["pan_deg"]),
                             float(rows[-1]["tilt_deg"])))
             done.add(cell["name"])
