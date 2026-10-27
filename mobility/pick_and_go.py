@@ -156,6 +156,10 @@ def main(argv=None):
     ap.add_argument("--head-y", type=float, default=0.0, metavar="CM",
                     help="how far the head sits from the near edge "
                          "(default 0, level with it)")
+    ap.add_argument("--max-drive", type=float, default=RP.MAX_DRIVE_S_HARD,
+                    metavar="SEC", help="longest one drive may run")
+    ap.add_argument("--drive-steps", type=int, default=RP.MAX_DRIVE_STEPS,
+                    help="how many drives one move may be split into")
     ap.add_argument("--one-shot", action="store_true",
                     help="aim once at the centre of the box instead of "
                          "covering it, so the movement is easy to follow")
@@ -261,6 +265,13 @@ def main(argv=None):
         print(f"  Rail OFF - head fixed at x={rail['fixed']:.1f}, "
               f"y={args.head_y:.1f}, looking into the bed.")
         print("  Pan covers the columns, tilt covers the rows.")
+
+    RP.MAX_DRIVE_STEPS = args.drive_steps
+    RP.MAX_DRIVE_S = {a: min(args.max_drive, RP.MAX_DRIVE_S[a])
+                      for a in RP.MAX_DRIVE_S}
+    print(f"  Drives: at most {args.drive_steps} per move, "
+          f"{min(args.max_drive, RP.MAX_DRIVE_S_HARD):.2f}s each "
+          f"= {args.drive_steps * min(args.max_drive, RP.MAX_DRIVE_S_HARD) * RP.SPEED_DEG['pan']:.0f} deg max")
 
     hw = RP.Hardware(dry=not args.live)
     if args.live:

@@ -153,17 +153,18 @@ HOME_DUTY = 70.0
 
 # Measured with a stopwatch at FULL power, against the axes as they
 # actually are: 23/24 is pan, 27/22 is tilt.
-SPEED_DEG_FULL = {
-    # Measured on the machine: 1.00 s at 15% duty turned it 10-20 deg.
-    # Taking the middle, 15 deg, that is 100 deg/s at full power - twice
-    # what was assumed, which is why every move ran past. A slow speed
-    # makes the code ask for a LONG drive, so underestimating overshoots.
-    "pan": 100.0,
-    # Measured the same way, and it came out the same: about 15 deg in
-    # 1.00 s at 15% duty. The two motors are the same part, so matching
-    # figures is what you would expect - the old 42.86 was the outlier.
-    "tilt": 100.0,
-}
+# You timed both axes at 1.00 s / 15% duty and read "10 to 20 degrees".
+#
+# Which end of that range to believe is not a toss-up. The code turns an
+# angle into a duration by dividing by this, so:
+#
+#   believe it is SLOW  -> asks for a LONG drive  -> overshoots
+#   believe it is FAST  -> asks for a SHORT drive -> stops short
+#
+# Overshooting is the one that drives the nozzle into the soil. Stopping
+# short just means pressing again. So the fast end of a fuzzy range is
+# the right end to take: 20 deg/s at 15% duty = 133 deg/s at full power.
+SPEED_DEG_FULL = {"pan": 133.0, "tilt": 133.0}
 
 # What to expect at DUTY. A DC motor is not linear in duty cycle - it
 # loses proportionally more to friction the slower it goes - so this is
@@ -200,7 +201,7 @@ MIN_MOVE_S = 0.15            # below this a move is all acceleration
 # moves that should have been a few degrees ran far past. Until each
 # axis has been timed at the duty it will really run at, this is what
 # bounds the damage, and it is deliberately short.
-MAX_DRIVE_S_HARD = 0.70
+MAX_DRIVE_S_HARD = 0.35
 
 MAX_DRIVE_DEG = {"pan": 10.0, "tilt": 10.0}
 
@@ -216,7 +217,7 @@ NEAR_VERTICAL_DEG = 75.0
 # several capped drives assumed the speed estimate was roughly right, so
 # repeating until the target was reached would arrive. It is not right -
 # a single drive already overshot - and repeating drove further past.
-MAX_DRIVE_STEPS = 20
+MAX_DRIVE_STEPS = 1
 GRACE = 1.2
 
 MAX_DRIVE_S = {a: min(MAX_DRIVE_S_HARD,
@@ -436,8 +437,13 @@ class Hardware:
 
         left = degrees - self.angle[axis]
         if abs(left) > 1.0:
-            print(f"      {axis} stopped {abs(left):.0f} deg short of "
-                  f"{degrees:.0f} - raise MAX_DRIVE_STEPS or the duty")
+            # Deliberately incremental: one short drive per press, so a
+            # wrong speed can only be wrong by a few degrees at a time.
+            # Pressing the same box again carries on from here, because
+            # the target is absolute and the believed angle has moved.
+            print(f"      {axis} now {self.angle[axis]:+.0f} of "
+                  f"{degrees:+.0f} deg - press again for another "
+                  f"{MAX_DRIVE_S[axis] * SPEED_DEG[axis]:.0f} deg")
         elif took:
             print(f"      {axis} -> {degrees:+.0f} deg in {took:.1f}s")
         return took
@@ -1005,6 +1011,13 @@ def main():
     ap.add_argument("--test-motor", metavar="AXIS", default=None,
                     help="run one axis at 100/60/30/15%% power to check "
                          "that PWM is working")
+    ap.add_argument("--max-drive", type=float, default=MAX_DRIVE_S_HARD,
+                    metavar="SEC",
+                    help=f"longest one drive may run "
+                         f"(default {MAX_DRIVE_S_HARD})")
+    ap.add_argument("--drive-steps", type=int, default=MAX_DRIVE_STEPS,
+                    help=f"how many drives one move may be split into "
+                         f"(default {MAX_DRIVE_STEPS})")
     ap.add_argument("--time-axis", metavar="AXIS", default=None,
                     help="drive one axis for a known time to measure its "
                          "real speed")
@@ -1022,6 +1035,11 @@ def main():
         if args.test_motor:
             test_motor(hw, args.test_motor)
             return
+
+        # These bound every drive, so apply them before anything moves.
+        globals()["MAX_DRIVE_STEPS"] = args.drive_steps
+        globals()["MAX_DRIVE_S"] = {a: min(args.max_drive, MAX_DRIVE_S[a])
+                                    for a in MAX_DRIVE_S}
 
         if args.time_axis:
             time_axis(hw, args.time_axis, args.drive_seconds)
