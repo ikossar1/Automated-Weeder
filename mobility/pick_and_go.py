@@ -312,7 +312,7 @@ def read_key(prompt="    > "):
         print()
 
 
-def teach(hw, cell, taught, use_rail, stops):
+def teach(hw, cell, taught, use_rail, stops, history=None):
     """
     Jog and spray in the same loop, and save what was last sprayed from.
 
@@ -445,6 +445,13 @@ def teach(hw, cell, taught, use_rail, stops):
                 b.strip().upper() for b in raw.split(",")]
             what = save_case(box, name, keep["rail_mm"], keep["pan"],
                              keep["tilt"], keep["spray_s"], crosses)
+            # A taught case is a motion the machine has just performed,
+            # so it belongs in the history like any other - otherwise
+            # retrace has nothing to walk back through after a session
+            # spent teaching rather than spraying.
+            if history is not None:
+                history.append((box, dict(keep, case=name,
+                                          crosses=crosses), 0.0, 0.0))
             print(f"    {what} {box} '{name}': pan {keep['pan']:+.2f}s, "
                   f"tilt {keep['tilt']:+.2f}s, spray {keep['spray_s']:.1f}s")
             return load_taught()
@@ -800,7 +807,7 @@ def main(argv=None):
                     print(f"  There is no box {idx}.")
                     continue
                 got = teach(hw, cells[idx], taught,
-                            not args.no_rail, stops)
+                            not args.no_rail, stops, history)
                 if got is not None:
                     taught = got
                 continue
