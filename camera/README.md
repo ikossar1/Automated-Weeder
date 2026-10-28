@@ -1,57 +1,40 @@
 # camera
 
-Point the machine, take a photo, and file it where mapping looks for it.
-
 ## Taking a photo
 
-    python3 take_photo.py
+    ./photo.sh
 
-It asks what the bed is called, runs the camera, and saves the picture
-into `mapping/photos/` already named. Or name it up front:
+Asks for a bed name, takes the photo, saves it to `mapping/photos/` as
+`<bed>_<number>.jpg` with the next free number.
 
-    python3 take_photo.py basil
+The whole thing is one command plus the naming:
 
-## What the names mean
+    rpicam-still -n -t 2000 -o ../mapping/photos/basil_1.jpg
 
-    <bed>_<number>.jpg
-
-    basil_1.jpg      first photo of the basil bed
-    basil_2.jpg      second photo of the same bed
-    bed_7.jpg        seventh photo of a bed just called "bed"
-
-The **bed** part is yours to choose and should say where the photo was
-taken - `basil`, `northrow`, `demo`. The **number** is the next free one
-for that bed, picked automatically, so taking another photo never
-overwrites an earlier one.
-
-This matters more than it looks. The camera writes the same filename
-every time it runs, so without renaming, each capture either destroys
-the last one or turns into photo1, photo2, photo_final. Named on the
-way in, a map made months later can still be traced back to the exact
-frame it came from.
+The naming is the only reason this is a script at all. The camera
+writes whatever filename you give it, so without picking a new one each
+time, every photo either overwrites the last or becomes photo1,
+photo2, photo_final - and a map made weeks later cannot be traced back
+to the frame it came from.
 
 To see what has been taken:
 
-    python3 take_photo.py --list
+    ls ../mapping/photos/
 
 ## Choosing one to map
 
     cd ../mapping
     python3 new_bed.py
 
-That lists the photos newest first and asks which to use, so the name
-is what you pick from. Pick the newest `basil_*` and you are mapping
-the basil bed; the number tells you which attempt.
+Lists the photos newest first and asks which to use. Pick the newest
+`basil_*` and you are mapping the basil bed.
 
 ## Framing the shot
 
     python3 move_camera.py
 
-Drives the machine by hand so the bed fills the frame before you shoot.
-Arrow keys pan and tilt, J and K move the rail, A pulses the valve, q
-quits. Framing is a camera job - there is nothing to map until the bed
-is actually in the picture.
+Drives the machine by hand so the bed fills the frame. Arrow keys pan
+and tilt, J and K move the rail, A pulses the valve, q quits.
 
-The valve on this machine latches: a pulse opens it and a pulse the
-other way shuts it, so quitting pulses it shut rather than just
-dropping the pins.
+The valve latches - a pulse opens it and a pulse the other way shuts
+it - so quitting pulses it shut rather than just dropping the pins.
