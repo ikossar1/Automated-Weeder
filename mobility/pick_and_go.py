@@ -78,61 +78,85 @@ def rail_stops(taught, step_mm):
     return out
 
 
+CASE_KEYS = "abcdefgh"
+
+
+def case_options(cells, taught, stops):
+    """
+    Every runnable thing, keyed by what you type to run it.
+
+    A box with two taught cases gives 0a and 0b; the bare number runs
+    whichever the map picks. Rail positions are single - a is a, there
+    is nothing to choose between.
+    """
+    out = {}
+    for cell in cells:
+        if cell["count"]:
+            continue
+        for n, case in enumerate(taught.get(cell["name"].upper(), [])):
+            out[f"{cell['index']}{CASE_KEYS[n]}"] = ("box", cell, case)
+    for key, cm, is_taught in stops:
+        out[key] = ("rail", key, cm)
+    return out
+
+
 def draw(cells, cols, rows, done, hw=None, stops=(), taught=None):
     """
-    The boxes and the rail positions, with what each one does.
+    The bed, and beside it everything that can be run.
 
-    A bare grid of numbers says nothing about which of them has been
-    taught or what pressing one would do, which is most of what you
-    need to know while teaching.
+    A grid of numbers alone does not say which boxes are blocked, what
+    has been taught for the ones that are not, or how to run a
+    particular case rather than whichever the map would choose. All of
+    that is here, because during a session it is all you need.
     """
     taught = taught or {}
 
     print("")
-    print("        " + "".join(f"{'C' + str(c + 1):^9}" for c in range(cols))
-          + "     rail")
-    for r in range(max(rows, len(stops))):
-        line = "   "
-        line += f"R{r + 1}  " if r < rows else "    "
+    print("        " + "".join(f"{'C' + str(c + 1):^10}" for c in range(cols)))
+    for r in range(rows):
+        line = f"   R{r + 1}  "
         for c in range(cols):
             n = r * cols + c
-            cell = cells[n] if (r < rows and n < len(cells)) else None
+            cell = cells[n] if n < len(cells) else None
             if cell is None:
-                line += f"{'':^9}"
+                line += f"{'':^10}"
             elif cell["count"]:
-                line += f"{'[crop]':^9}"
+                line += f"{'[crop]':^10}"
             elif cell["name"] in done:
-                line += f"{'done':^9}"
+                line += f"{'done':^10}"
             else:
-                line += f"{str(cell['index']):^9}"
-        if r < len(stops):
-            key, cm, is_taught = stops[r]
-            here = ""
-            if hw is not None and abs(hw.rail_cm - cm) < 0.2:
-                here = "  <- here"
-            line += (f"     {key}  {cm * 10:4.0f} mm"
-                     f"{'' if is_taught else '  (default)'}{here}")
+                line += f"{str(cell['index']):^10}"
         print(line)
 
     print("")
-    print("   What each one does:")
-    for n, cell in enumerate(cells):
-        cases = taught.get(cell["name"].upper(), [])
+    print("   Press        To do")
+    for cell in cells:
         if cell["count"]:
-            detail = "holds a crop, will not be sprayed"
-        elif not cases:
-            detail = "not taught yet"
-        else:
-            detail = ", ".join(c["case"] for c in cases)
-        print(f"     {cell['index']}   box {cell['name']:<6} {detail}")
+            print(f"     -          box {cell['index']} "
+                  f"({cell['name']}) holds a crop")
+            continue
+        cases = taught.get(cell["name"].upper(), [])
+        if not cases:
+            print(f"     {cell['index']}          box {cell['index']} "
+                  f"({cell['name']}) - nothing taught, t{cell['index']} "
+                  f"to teach it")
+            continue
+        picked, _ = choose_case(cell["name"], cases,
+                                {c["name"].upper() for c in cells
+                                 if c["count"]})
+        for n, case in enumerate(cases):
+            key = f"{cell['index']}{CASE_KEYS[n]}"
+            auto = "  <- what {} runs".format(cell["index"]) if case is picked else ""
+            print(f"     {key:<10} box {cell['index']} ({cell['name']}) "
+                  f"'{case['case']}'{auto}")
+
     for key, cm, is_taught in stops:
-        detail = (f"taught, {cm * 10:.0f} mm" if is_taught
-                  else f"not taught yet (default {cm * 10:.0f} mm)")
-        print(f"     {key}   rail      {detail}")
+        how = "" if is_taught else "  (default, tb to teach)".replace("tb", "t" + key)
+        print(f"     {key:<10} rail to {cm * 10:.0f} mm{how}")
 
     if hw is not None:
         print("")
-        print(f"   Believed now: pan {hw.angle['pan']:+.0f}, "
+        print(f"   Now at: pan {hw.angle['pan']:+.0f}, "
               f"tilt {hw.angle['tilt']:+.0f} deg, rail "
               f"{hw.rail_cm * 10:.0f} mm")
 
@@ -766,6 +790,20 @@ def main(argv=None):
                 break
             if said in ("q", "quit", "exit"):
                 break
+
+            # A key like 2b names one taught case directly, rather than
+            # letting the map choose. Useful while teaching, when the
+            # whole point is to compare one approach against another.
+            options = case_options(cells, taught, stops)
+            if said in options and len(said) == 2:
+                _kind, cell, case = options[said]
+                print(f"  {cell['name']} - '{case['case']}' (you chose it)")
+                run_taught(hw, cell["name"], case,
+                           use_rail=not args.no_rail)
+                history.append((cell["name"], case, hw.angle["pan"],
+                                hw.angle["tilt"]))
+                done.add(cell["name"])
+                continue
 
             picked_stop = [s for s in stops if s[0] == said]
             if picked_stop:
