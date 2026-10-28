@@ -31,7 +31,7 @@ Lists the photos newest first and asks which to use. Pick the newest
 
 ## Framing the shot
 
-    python3 move_camera.py
+    python3 ../mobility/move_camera.py
 
 Drives the machine by hand so the bed fills the frame. Arrow keys pan
 and tilt, J and K move the rail, A pulses the valve, q quits.
