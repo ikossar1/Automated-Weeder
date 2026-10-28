@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -285,7 +286,15 @@ def main():
         corners_file = HERE / ".corners.json"
         corners_file.unlink(missing_ok=True)
 
-        subprocess.run([sys.executable, str(HERE / "pick_corners.py"),
+        # Over SSH there is no display, so the OpenCV window cannot
+        # open. The browser picker serves the photo from here instead
+        # and takes the clicks from wherever you are sitting.
+        headless = not (os.environ.get("DISPLAY")
+                        or os.environ.get("WAYLAND_DISPLAY"))
+        picker = "pick_corners_web.py" if headless else "pick_corners.py"
+        if headless:
+            print("No display here, so the picker opens in a browser.")
+        subprocess.run([sys.executable, str(HERE / picker),
                         str(image), str(width), str(depth),
                         "--out", str(corners_file)], cwd=HERE)
 
