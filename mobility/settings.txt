@@ -49,9 +49,23 @@ rail_steps_per_cm = 2000
 # Seconds per half pulse. start_delay is the first step - a stepper
 # cannot begin at full rate, and if it buzzes without moving this is
 # the number to raise.
-rail_step_delay   = 0.00008
+#
+# 0.0000133 asks for 37,600 steps/s, which is 18.8 cm/s. Two things
+# will stop it getting there:
+#
+#   Python   a whole step costs about 28 us of interpreter time even
+#            before the pin writes, so the ceiling is near 35,000/s on
+#            a good day and lower once real GPIO calls are included.
+#   The motor 37,600 steps/s at 1/8 microstepping is 23 turns a second.
+#            No small stepper follows that; it will stall and buzz.
+#
+# If it stalls, the fix is NOT a smaller number here - it is fewer
+# microsteps. Setting the EasyDriver to full steps (MS1 and MS2 low)
+# makes every pulse eight times bigger, so the same pulse rate gives
+# eight times the speed. Then set rail_steps_per_cm to 250.
+rail_step_delay   = 0.0000133
 rail_start_delay  = 0.0025
-rail_ramp_steps   = 600
+rail_ramp_steps   = 2000
 rail_travel_cm    = 35
 # true if DIR high moves away from the home stop
 rail_dir_forward  = true
