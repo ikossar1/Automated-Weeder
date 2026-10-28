@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "spraying"))
@@ -307,13 +308,15 @@ def teach(hw, cell, taught, use_rail, stops):
     spray_s = 2.0
     step = STEPS[0]
     approved = None
+    opened_at = None
 
     print("")
     print("    arrows  left / right pan, up / down tilt")
     if use_rail:
         print("    s / j   rail right / left 1 cm")
-    print("    f       step size      t  spray from here")
-    print("    + / -   spray time     p  type the spray time")
+    print("    f       step size")
+    print("    t       valve open, t again to shut it")
+    print("    + / -   nudge the saved spray time, p to type it")
     print("    0       undo it all    k  keep it, c to cancel")
 
     while True:
@@ -347,12 +350,22 @@ def teach(hw, cell, taught, use_rail, stops):
         elif said == "f":
             step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
         elif said == "t":
-            hw.valve(True)
-            RP.wait(hw, spray_s)
-            hw.valve(False)
-            approved = {"pan": totals["pan"], "tilt": totals["tilt"],
-                        "rail_mm": rail_mm, "spray_s": spray_s}
-            print("    noted - this is what k will save")
+            # Open, and open it stays until you press t again. The time
+            # between the two presses IS the spray time - you judge it
+            # by watching the mulch land, which is the only way it can
+            # be judged, and the clock just records what you decided.
+            if opened_at is None:
+                hw.valve(True)
+                opened_at = time.monotonic()
+                print("    valve OPEN - press t again to shut it")
+            else:
+                hw.valve(False)
+                spray_s = round(max(0.1, time.monotonic() - opened_at), 1)
+                opened_at = None
+                approved = {"pan": totals["pan"], "tilt": totals["tilt"],
+                            "rail_mm": rail_mm, "spray_s": spray_s}
+                print(f"    valve SHUT after {spray_s:.1f}s - that is what "
+                      f"k will save")
         elif said in ("+", "-"):
             spray_s = max(0.1, spray_s + (0.2 if said == "+" else -0.2))
         elif said == "p":
@@ -369,9 +382,15 @@ def teach(hw, cell, taught, use_rail, stops):
             totals.update({"pan": 0.0, "tilt": 0.0})
             hw.angle.update(start)
         elif said == "c":
+            if opened_at is not None:
+                hw.valve(False)
             print("    cancelled, nothing saved")
             return None
         elif said == "k":
+            if opened_at is not None:
+                hw.valve(False)
+                opened_at = None
+                print("    valve shut first")
             keep = approved
             if keep is None:
                 print("    Not sprayed yet, so nothing has been seen to")
