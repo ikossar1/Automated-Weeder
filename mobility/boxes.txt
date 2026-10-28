@@ -1,26 +1,37 @@
-# Taught motions - one line per box.
+# Taught motions. Several cases per box, and the map picks between them.
 #
-# Instead of working an angle out from the map and dividing by a motor
-# speed, each box says plainly how long to run each motor. You tune the
-# numbers by watching the machine, and it repeats exactly what you tuned.
-# No degrees per second, no overshoot from a bad estimate.
+# Each line is one way of reaching one box. The last column says which
+# boxes the spray travels OVER on the way. If any of those holds a
+# plant, that case is unusable and the next one for that box is tried.
 #
-# It assumes the head starts from the same place every run, so set the
-# datum (z at the prompt) before you begin. After spraying, each motion
-# is run backwards to put the head back where it started, ready for the
-# next box.
+# That is the whole idea: a box behind a planted one cannot be reached
+# head-on, but it can be reached from further along the rail at a
+# shallower angle, crossing different ground. You teach both, and the
+# map decides which applies today.
 #
+#   box       which box this reaches
+#   case      a name for it, yours to choose
 #   rail_mm   where to put the rail first, absolute, from home
 #   pan_s     seconds to drive pan. NEGATIVE means the other way.
 #   tilt_s    seconds to drive tilt. NEGATIVE means the other way.
 #   spray_s   seconds to hold the valve open
+#   crosses   boxes the spray passes over, comma separated, or - for none
 #
-# A box with no line here falls back to the computed aim.
+# Cases are tried top to bottom, so put the one you would rather use
+# first. A box with no usable case falls back to the computed aim.
 
-# box     rail_mm   pan_s   tilt_s   spray_s
-C1R1          0      -1.5      1.6       2.0
-C2R1          0       0.0      2.2       2.0
-C3R1          0       1.5      1.6       2.0
-C1R2         80      -0.7      0.9       2.0
-C2R2         80       0.0      1.0       2.0
-C3R2         80       0.7      0.9       2.0
+# box    case       rail_mm  pan_s  tilt_s  spray_s  crosses
+C1R1     direct          0   -1.5     1.6      2.0   -
+C2R1     direct          0    0.0     2.2      2.0   -
+C3R1     direct          0    1.5     1.6      2.0   -
+
+# The back row, head-on. Each crosses the box in front of it.
+C1R2     direct         80   -0.7     0.9      2.0   C1R1
+C2R2     direct         80    0.0     1.0      2.0   C2R1
+C3R2     direct         80    0.7     0.9      2.0   C3R1
+
+# The back row again, approached from further along the rail so the
+# spray comes in at an angle and misses whatever is in front.
+C1R2     from_right    160   -1.4     0.8      2.4   C2R1
+C2R2     from_right    160   -0.8     0.8      2.4   C3R1
+C3R2     from_left       0    1.4     0.8      2.4   C2R1

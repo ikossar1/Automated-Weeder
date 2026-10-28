@@ -123,7 +123,7 @@ BOXES_FILE = HERE / "boxes.txt"
 
 
 def load_taught(path=BOXES_FILE):
-    """Per-box motions from boxes.txt, as {name: dict}."""
+    """Cases from boxes.txt, as {box: [case, case, ...]} in file order."""
     out = {}
     if not path.exists():
         return out
@@ -132,16 +132,40 @@ def load_taught(path=BOXES_FILE):
         if not line:
             continue
         bits = line.split()
-        if len(bits) != 5:
-            print(f"  boxes.txt line {n}: want 5 values, got {len(bits)}")
+        if len(bits) != 7:
+            print(f"  boxes.txt line {n}: want 7 values, got {len(bits)}")
             continue
         try:
-            out[bits[0].upper()] = {
-                "rail_mm": float(bits[1]), "pan_s": float(bits[2]),
-                "tilt_s": float(bits[3]), "spray_s": float(bits[4])}
+            case = {
+                "case": bits[1],
+                "rail_mm": float(bits[2]), "pan_s": float(bits[3]),
+                "tilt_s": float(bits[4]), "spray_s": float(bits[5]),
+                "crosses": [] if bits[6] == "-" else
+                           [b.strip().upper() for b in bits[6].split(",")],
+            }
         except ValueError:
             print(f"  boxes.txt line {n}: not all numbers, ignored")
+            continue
+        out.setdefault(bits[0].upper(), []).append(case)
     return out
+
+
+def choose_case(name, cases, occupied):
+    """
+    The first case whose spray does not pass over a planted box.
+
+    This is the map earning its place. A taught motion cannot see a
+    plant, but it can be labelled with the ground it flies over, and
+    the map knows what is growing there. So the choice between "head
+    on" and "from further along the rail" is made from the bed as it
+    is today, not from how it looked when the motions were taught.
+    """
+    for case in cases:
+        blocked = [b for b in case["crosses"] if b in occupied]
+        if not blocked:
+            return case, None
+        last = blocked
+    return None, last
 
 
 def run_taught(hw, name, m, use_rail, cap=5.0):
@@ -348,15 +372,6 @@ def main(argv=None):
     if args.pan_limit:
         params["pan_limit"] = args.pan_limit
 
-    cells = SB.build_cells(bed, plants, args.cols, args.rows)
-    for i, c in enumerate(cells):
-        c["index"] = i
-        if args.all_boxes:
-            # For a movement test the plants do not matter - what is
-            # wanted is every box reachable, so the head can be sent
-            # round all of them and watched.
-            c["count"] = 0
-
     print("=" * 62)
     print(f"PICK AND GO   {'LIVE' if args.live else '(rehearsal)'}")
     print("=" * 62)
@@ -403,6 +418,19 @@ def main(argv=None):
     if args.all_boxes:
         print("  All boxes selectable, plants ignored - movement test only.")
 
+    cells = SB.build_cells(bed, plants, args.cols, args.rows)
+    for i, c in enumerate(cells):
+        c["index"] = i
+        if args.all_boxes:
+            # For a movement test the plants do not matter - what is
+            # wanted is every box reachable, so the head can be sent
+            # round all of them and watched.
+            c["count"] = 0
+
+    # Which boxes hold a plant, by name. This is the only thing the
+    # case picker needs from the map, and it is the thing only the map
+    # knows.
+    occupied = {c["name"].upper() for c in cells if c["count"]}
     taught = {} if args.computed else load_taught()
     if taught:
         print(f"  {len(taught)} taught motion(s) in boxes.txt - these are")
@@ -471,8 +499,15 @@ def main(argv=None):
                 for cell in todo:
                     print(f"{NL_}  {cell['name']}...")
                     if cell["name"].upper() in taught:
-                        run_taught(hw, cell["name"],
-                                   taught[cell["name"].upper()],
+                        case, blocked = choose_case(
+                            cell["name"], taught[cell["name"].upper()],
+                            occupied)
+                        if case is None:
+                            print(f"    every case crosses "
+                                  f"{', '.join(blocked)} - skipped")
+                            continue
+                        print(f"    case '{case['case']}'")
+                        run_taught(hw, cell["name"], case,
                                    use_rail=not args.no_rail)
                         done.add(cell["name"])
                         continue
@@ -568,8 +603,17 @@ def main(argv=None):
                 continue
 
             if cell["name"].upper() in taught:
-                print(f"  {cell['name']} - taught motion")
-                run_taught(hw, cell["name"], taught[cell["name"].upper()],
+                case, blocked = choose_case(
+                    cell["name"], taught[cell["name"].upper()], occupied)
+                if case is None:
+                    print(f"  {cell['name']}: every taught case shoots over "
+                          f"{', '.join(blocked)}, which is planted.")
+                    print("  Teach another approach, or use --computed.")
+                    continue
+                print(f"  {cell['name']} - taught motion '{case['case']}'"
+                      + (f", crossing {', '.join(case['crosses'])}"
+                         if case["crosses"] else ""))
+                run_taught(hw, cell["name"], case,
                            use_rail=not args.no_rail)
                 history.append((cell["name"], hw.angle["pan"],
                                 hw.angle["tilt"]))
