@@ -114,6 +114,7 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
     print("  number  aim at that box      letter  move the rail there")
     print("  all     spray every free box, in order")
     print("  t3      teach box 3 - jog it, test it, save it")
+    print("  jog     move it about without teaching anything")
     print("  n       back to neutral")
     print("  r       retrace backwards, valve shut")
     print("  z       call this position neutral")
@@ -651,6 +652,39 @@ def main(argv=None):
                 hw.angle["pan"] = 0.0
                 hw.angle["tilt"] = 0.0
                 print("  Noted - this position is now neutral.")
+                continue
+
+            if said == "jog":
+                # Moving without recording. Inside teach every nudge has
+                # to count, or the saved numbers would not reproduce the
+                # position they describe - so repositioning to look at
+                # something, or to free a jammed axis, belongs out here
+                # where nothing is being written down.
+                print("")
+                print("    a / d  pan    s / w  tilt   (capitals for 0.4s)")
+                if not args.no_rail:
+                    print("    [ / ]  rail 10 mm")
+                print("    x      done")
+                print("    Nothing here is saved. Press z afterwards if")
+                print("    you have moved what you call neutral.")
+                while True:
+                    try:
+                        key = input("    jog > ").strip()
+                    except EOFError:
+                        break
+                    if key == "x":
+                        break
+                    if key in JOG:
+                        axis, secs = JOG[key]
+                        hw.drive(axis, 1 if secs > 0 else -1)
+                        RP.wait(hw, abs(secs))
+                        hw.stop(axis)
+                        RP.wait(hw, RP.SETTLE_S)
+                        hw.angle[axis] += secs * RP.SPEED_DEG[axis]
+                    elif key in ("[", "]") and not args.no_rail:
+                        hw.rail_to(hw.rail_cm + (1.0 if key == "]" else -1.0))
+                    elif key:
+                        print("    a d s w, [ ], or x")
                 continue
 
             if said.startswith("t") and said[1:].strip().isdigit():
