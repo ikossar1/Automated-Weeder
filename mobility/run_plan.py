@@ -308,7 +308,7 @@ def load_settings(path=SETTINGS_FILE):
 
 
 TILT_DOWN = 0.0
-RAIL_JOG_CM = 10.0
+RAIL_JOG_CM = 25.0
 _SETTINGS = load_settings()
 
 
