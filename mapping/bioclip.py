@@ -56,6 +56,9 @@ CANDIDATES = (
         "Persicaria maculosa", "Erigeron canadensis", "Rosa multiflora",
         "Toxicodendron radicans", "Parthenocissus quinquefolia",
         "Acer rubrum", "Quercus rubra",
+        # The pipeline treats this one as a negative, not a crop - it is
+        # the weed in the indoor test, with the spider plant as the crop.
+        "Philodendron hederaceum",
         # Generic catch-alls, so odd plants have somewhere to land rather
         # than being forced into the nearest species.
         "lawn grass", "tree seedling", "fern", "moss",
@@ -73,7 +76,6 @@ CANDIDATES = (
     # lands on the map instead of being discarded as a weed.
     + [(n, "crop") for n in [
         "Chlorophytum comosum",
-        "Philodendron hederaceum",
         "Philodendron bipinnatifidum",
         "Epipremnum aureum",
         "Monstera deliciosa",
