@@ -1,0 +1,26 @@
+# Taught motions - one line per box.
+#
+# Instead of working an angle out from the map and dividing by a motor
+# speed, each box says plainly how long to run each motor. You tune the
+# numbers by watching the machine, and it repeats exactly what you tuned.
+# No degrees per second, no overshoot from a bad estimate.
+#
+# It assumes the head starts from the same place every run, so set the
+# datum (z at the prompt) before you begin. After spraying, each motion
+# is run backwards to put the head back where it started, ready for the
+# next box.
+#
+#   rail_mm   where to put the rail first, absolute, from home
+#   pan_s     seconds to drive pan. NEGATIVE means the other way.
+#   tilt_s    seconds to drive tilt. NEGATIVE means the other way.
+#   spray_s   seconds to hold the valve open
+#
+# A box with no line here falls back to the computed aim.
+
+# box     rail_mm   pan_s   tilt_s   spray_s
+C1R1          0      -1.5      1.6       2.0
+C2R1          0       0.0      2.2       2.0
+C3R1          0       1.5      1.6       2.0
+C1R2         80      -0.7      0.9       2.0
+C2R2         80       0.0      1.0       2.0
+C3R2         80       0.7      0.9       2.0

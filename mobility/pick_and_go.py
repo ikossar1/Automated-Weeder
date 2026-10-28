@@ -119,6 +119,70 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
     print("  q       finish")
 
 
+BOXES_FILE = HERE / "boxes.txt"
+
+
+def load_taught(path=BOXES_FILE):
+    """Per-box motions from boxes.txt, as {name: dict}."""
+    out = {}
+    if not path.exists():
+        return out
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        bits = line.split()
+        if len(bits) != 5:
+            print(f"  boxes.txt line {n}: want 5 values, got {len(bits)}")
+            continue
+        try:
+            out[bits[0].upper()] = {
+                "rail_mm": float(bits[1]), "pan_s": float(bits[2]),
+                "tilt_s": float(bits[3]), "spray_s": float(bits[4])}
+        except ValueError:
+            print(f"  boxes.txt line {n}: not all numbers, ignored")
+    return out
+
+
+def run_taught(hw, name, m, use_rail, cap=5.0):
+    """
+    Replay a taught motion, then undo it.
+
+    Undoing matters more than it looks. Nothing measures where pan and
+    tilt are, so the only way the next box can start from a known place
+    is to put this one back where it began - same durations, opposite
+    directions. Drift still creeps in, which is what z is for.
+    """
+    def drive(axis, secs):
+        if abs(secs) < RP.MIN_MOVE_S:
+            return
+        if abs(secs) > cap:
+            print(f"    {axis} {abs(secs):.1f}s is over the {cap:.0f}s "
+                  f"limit - check boxes.txt")
+            return
+        hw.drive(axis, 1 if secs > 0 else -1)
+        RP.wait(hw, abs(secs))
+        hw.stop(axis)
+        RP.wait(hw, RP.SETTLE_S)
+
+    hw.valve(False)
+    if use_rail:
+        hw.rail_to(m["rail_mm"] / 10.0)
+
+    print(f"    pan {m['pan_s']:+.2f}s, tilt {m['tilt_s']:+.2f}s")
+    drive("pan", m["pan_s"])
+    drive("tilt", m["tilt_s"])
+
+    print(f"    spraying {m['spray_s']:.1f}s")
+    hw.valve(True)
+    RP.wait(hw, m["spray_s"])
+    hw.valve(False)
+
+    print("    back to the start")
+    drive("tilt", -m["tilt_s"])
+    drive("pan", -m["pan_s"])
+
+
 def centre_shot(cell, rail, params):
     """
     One shot at the middle of the box, and nothing else.
@@ -212,6 +276,9 @@ def main(argv=None):
                     metavar="DEG",
                     help="tip every shot this many degrees further down, "
                          "to correct a mount whose zero is not level")
+    ap.add_argument("--computed", action="store_true",
+                    help="ignore boxes.txt and work the angles out from "
+                         "the map instead")
     ap.add_argument("--one-shot", action="store_true",
                     help="aim once at the centre of the box instead of "
                          "covering it, so the movement is easy to follow")
@@ -336,6 +403,10 @@ def main(argv=None):
     if args.all_boxes:
         print("  All boxes selectable, plants ignored - movement test only.")
 
+    taught = {} if args.computed else load_taught()
+    if taught:
+        print(f"  {len(taught)} taught motion(s) in boxes.txt - these are")
+        print("  replayed as written. --computed works the angles out instead.")
     stops = rail_stops(args.rail_step, args.rail_stops)
     done = set()
     # Where each box was aimed, in the order they were done, so the run
@@ -399,6 +470,12 @@ def main(argv=None):
                     continue
                 for cell in todo:
                     print(f"{NL_}  {cell['name']}...")
+                    if cell["name"].upper() in taught:
+                        run_taught(hw, cell["name"],
+                                   taught[cell["name"].upper()],
+                                   use_rail=not args.no_rail)
+                        done.add(cell["name"])
+                        continue
                     rows = plan_one(cell, cells, aim_plants, bed, rail,
                                     params, one_shot=args.one_shot
                                     or args.all_boxes)
@@ -488,6 +565,15 @@ def main(argv=None):
             cell = cells[idx]
             if cell["count"]:
                 print(f"  Box {idx} holds a plant. Pick another.")
+                continue
+
+            if cell["name"].upper() in taught:
+                print(f"  {cell['name']} - taught motion")
+                run_taught(hw, cell["name"], taught[cell["name"].upper()],
+                           use_rail=not args.no_rail)
+                history.append((cell["name"], hw.angle["pan"],
+                                hw.angle["tilt"]))
+                done.add(cell["name"])
                 continue
 
             print(f"\n  Planning {cell['name']}...")
