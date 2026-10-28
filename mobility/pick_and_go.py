@@ -49,44 +49,54 @@ def newest_map():
     return sorted(beds, key=lambda d: -d.stat().st_mtime)[0]
 
 
-# The four boxes keep the numbers they already had, so nothing taught
-# so far has to be renumbered. 3 and 5 are no longer boxes - they are
-# the two x translations, which are taught and fired the same way but
-# move the rail instead of aiming at anything.
-BOX_SLOTS = [0, 1, 2, 4]
-X_SLOTS = {3: "X_FWD", 5: "X_BACK"}
+# Four boxes, numbered across then down, and three rail positions
+# named a b c. The boxes are aimed at; the rail positions are driven
+# to. Both are taught the same way and both live in boxes.txt, which
+# is why they share a screen.
+BOX_SLOTS = [0, 1, 2, 3]
+RAIL_STOPS = ["a", "b", "c"]
+RAIL_NAME = {k: f"RAIL_{k.upper()}" for k in RAIL_STOPS}
 
 RAIL_KEYS = "abcdefgh"
 
 
-def rail_stops(step_mm, count):
-    """Where along the rail the head may be parked, in cm from home."""
-    return [(RAIL_KEYS[i], i * step_mm / 10.0) for i in range(count)]
+def rail_stops(taught, step_mm):
+    """
+    The three rail positions, taught ones first.
+
+    Until a stop has been taught it falls back to an even spacing, so
+    there is something to drive to on day one - but the whole point is
+    that you replace them with positions you chose by eye.
+    """
+    out = []
+    for i, key in enumerate(RAIL_STOPS):
+        cases = taught.get(RAIL_NAME[key], [])
+        if cases:
+            out.append((key, cases[0]["rail_mm"] / 10.0, True))
+        else:
+            out.append((key, i * step_mm / 10.0, False))
+    return out
 
 
 def draw(cells, cols, rows, done, hw=None, stops=(), taught=None):
     """
-    The boxes and the x translations, in one picture.
+    The boxes and the rail positions, with what each one does.
 
-    Both are things you press a number for and both are taught the same
-    way, so they belong on one screen - with what each one actually does
-    written next to it, because a bare number says nothing about whether
-    it has been taught or what it would do if pressed.
+    A bare grid of numbers says nothing about which of them has been
+    taught or what pressing one would do, which is most of what you
+    need to know while teaching.
     """
     taught = taught or {}
-    by_slot = {}
-    for n, cell in enumerate(cells):
-        if n < len(BOX_SLOTS):
-            by_slot[BOX_SLOTS[n]] = cell
 
     print("")
     print("        " + "".join(f"{'C' + str(c + 1):^9}" for c in range(cols))
-          + "      x translation")
-    for r in range(rows):
-        line = f"   R{r + 1}  "
+          + "     rail")
+    for r in range(max(rows, len(stops))):
+        line = "   "
+        line += f"R{r + 1}  " if r < rows else "    "
         for c in range(cols):
             n = r * cols + c
-            cell = cells[n] if n < len(cells) else None
+            cell = cells[n] if (r < rows and n < len(cells)) else None
             if cell is None:
                 line += f"{'':^9}"
             elif cell["count"]:
@@ -95,36 +105,30 @@ def draw(cells, cols, rows, done, hw=None, stops=(), taught=None):
                 line += f"{'done':^9}"
             else:
                 line += f"{str(cell['index']):^9}"
-        slots = sorted(X_SLOTS)
-        if r < len(slots):
-            slot = slots[r]
-            name = X_SLOTS[slot]
-            cases = taught.get(name, [])
-            what = (f"{cases[0]['rail_mm']:+.0f} mm" if cases
-                    else "not taught")
-            line += f"      {slot}   {name.lower():<7} {what}"
+        if r < len(stops):
+            key, cm, is_taught = stops[r]
+            here = ""
+            if hw is not None and abs(hw.rail_cm - cm) < 0.2:
+                here = "  <- here"
+            line += (f"     {key}  {cm * 10:4.0f} mm"
+                     f"{'' if is_taught else '  (default)'}{here}")
         print(line)
 
     print("")
     print("   What each one does:")
-    for slot in sorted(list(by_slot) + list(X_SLOTS)):
-        if slot in by_slot:
-            cell = by_slot[slot]
-            cases = taught.get(cell["name"].upper(), [])
-            label = f"box {cell['name']}"
-            if cell["count"]:
-                detail = "holds a crop, will not be sprayed"
-            elif not cases:
-                detail = "not taught yet"
-            else:
-                detail = ", ".join(c["case"] for c in cases)
+    for n, cell in enumerate(cells):
+        cases = taught.get(cell["name"].upper(), [])
+        if cell["count"]:
+            detail = "holds a crop, will not be sprayed"
+        elif not cases:
+            detail = "not taught yet"
         else:
-            name = X_SLOTS[slot]
-            cases = taught.get(name, [])
-            label = f"x move {name.lower()}"
-            detail = (", ".join(f"{c['case']} {c['rail_mm']:+.0f}mm"
-                                for c in cases) if cases else "not taught yet")
-        print(f"     {slot}   {label:<14} {detail}")
+            detail = ", ".join(c["case"] for c in cases)
+        print(f"     {cell['index']}   box {cell['name']:<6} {detail}")
+    for key, cm, is_taught in stops:
+        detail = (f"taught, {cm * 10:.0f} mm" if is_taught
+                  else f"not taught yet (default {cm * 10:.0f} mm)")
+        print(f"     {key}   rail      {detail}")
 
     if hw is not None:
         print("")
@@ -320,7 +324,7 @@ def read_key(prompt="    > "):
         print()
 
 
-def teach_x(hw, name, taught, use_rail):
+def teach_rail_stop(hw, key, taught, use_rail):
     """
     Teach one x translation: drive the rail, keep the distance.
 
@@ -334,9 +338,11 @@ def teach_x(hw, name, taught, use_rail):
         print("  The rail is off, so there is nothing to teach.")
         return None
 
+    name = RAIL_NAME[key]
     print("")
-    print(f"  Teaching {name.lower()}. Existing: "
-          + (", ".join(c["case"] for c in taught.get(name, [])) or "none"))
+    print(f"  Teaching rail position '{key}'. Currently: "
+          + (f"{taught[name][0]['rail_mm']:.0f} mm"
+             if taught.get(name) else "not taught"))
     case = input("  Name for this case [standard]: ").strip() or "standard"
 
     begin = hw.rail_cm
@@ -346,10 +352,10 @@ def teach_x(hw, name, taught, use_rail):
     print("    k       keep the distance      c  cancel")
 
     while True:
-        moved = (hw.rail_cm - begin) * 10.0
-        print(f"{NL_}    moved {moved:+.0f} mm from where you began")
+        print(f"{NL_}    rail at {hw.rail_cm * 10:.0f} mm"
+              f"   ({(hw.rail_cm - begin) * 10:+.0f} from where you began)")
         try:
-            said = read_key(f"    teach {name.lower()} > ")
+            said = read_key(f"    teach rail {key} > ")
         except EOFError:
             return None
         if said in RAIL_KEY:
@@ -360,11 +366,12 @@ def teach_x(hw, name, taught, use_rail):
             print("    cancelled, nothing saved")
             return None
         elif said == "k":
-            if abs(moved) < 0.5:
-                print("    It has not moved. Drive it somewhere first.")
-                continue
-            what = save_case(name, case, moved, 0.0, 0.0, 0.0, [])
-            print(f"    {what} {name.lower()} '{case}': {moved:+.0f} mm")
+            # An absolute position, not a distance moved. A rail stop
+            # is somewhere to BE - if it were a nudge, pressing it
+            # twice would take you somewhere different each time.
+            where = hw.rail_cm * 10.0
+            what = save_case(name, case, where, 0.0, 0.0, 0.0, [])
+            print(f"    {what} rail '{key}' at {where:.0f} mm")
             return load_taught()
         elif said:
             print("    s, j, 0, k or c")
@@ -745,7 +752,7 @@ def main(argv=None):
     if taught:
         print(f"  {len(taught)} taught motion(s) in boxes.txt - these are")
         print("  replayed as written. --computed works the angles out instead.")
-    stops = rail_stops(args.rail_step, args.rail_stops)
+    stops = rail_stops(taught, args.rail_step)
     done = set()
     # Where each box was aimed, in the order they were done, so the run
     # can be walked back through.
@@ -762,7 +769,7 @@ def main(argv=None):
 
             picked_stop = [s for s in stops if s[0] == said]
             if picked_stop:
-                key, cm = picked_stop[0]
+                key, cm, _is_taught = picked_stop[0]
                 if args.no_rail:
                     print(f"  Rail is off (--no-rail), so {key} cannot "
                           f"move it. Drop that flag to use the stops.")
@@ -861,14 +868,17 @@ def main(argv=None):
                         print("    arrows, s / j, or x")
                 continue
 
+            if (said.startswith("t") and len(said) == 2
+                    and said[1] in RAIL_STOPS):
+                got = teach_rail_stop(hw, said[1], taught,
+                                      not args.no_rail)
+                if got is not None:
+                    taught = got
+                    stops = rail_stops(taught, args.rail_step)
+                continue
+
             if said.startswith("t") and said[1:].strip().isdigit():
                 idx = int(said[1:].strip())
-                if idx in X_SLOTS:
-                    got = teach_x(hw, X_SLOTS[idx], taught,
-                                  not args.no_rail)
-                    if got is not None:
-                        taught = got
-                    continue
                 if idx not in BOX_SLOTS:
                     print(f"  There is no {idx}.")
                     continue
@@ -982,28 +992,6 @@ def main(argv=None):
                     RP.MAX_DRIVE_STEPS = was
                 continue
             if not said:
-                continue
-
-            if said.isdigit() and int(said) in X_SLOTS:
-                name = X_SLOTS[int(said)]
-                cases = taught.get(name, [])
-                if not cases:
-                    print(f"  {name.lower()} is not taught yet - "
-                          f"use t{said}.")
-                    continue
-                if args.no_rail:
-                    print("  rail is off")
-                    continue
-                move = cases[0]["rail_mm"]
-                print(f"  {name.lower()}: rail {move:+.0f} mm")
-                hw.valve(False)
-                was = RP.MAX_DRIVE_STEPS
-                RP.MAX_DRIVE_STEPS = 40
-                try:
-                    hw.rail_to(hw.rail_cm + move / 10.0)
-                finally:
-                    RP.MAX_DRIVE_STEPS = was
-                print(f"  rail now at {hw.rail_cm * 10:.0f} mm")
                 continue
 
             try:
