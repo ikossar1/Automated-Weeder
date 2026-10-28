@@ -113,6 +113,7 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
     print("  [crop] holds a plant and cannot be sprayed.")
     print("  number  aim at that box      letter  move the rail there")
     print("  all     spray every free box, in order")
+    print("  t3      teach box 3 - jog it, test it, save it")
     print("  n       back to neutral")
     print("  r       retrace backwards, valve shut")
     print("  z       call this position neutral")
@@ -205,6 +206,125 @@ def run_taught(hw, name, m, use_rail, cap=5.0):
     print("    back to the start")
     drive("tilt", -m["tilt_s"])
     drive("pan", -m["pan_s"])
+
+
+def save_case(box, case, rail_mm, pan_s, tilt_s, spray_s, crosses,
+              path=BOXES_FILE):
+    """
+    Write one case back to boxes.txt, keeping the comments.
+
+    Rewrites the matching box+case line if there is one, appends if not.
+    The notes at the top of that file are the only explanation of what
+    the columns mean, so they are preserved rather than regenerated.
+    """
+    line = (f"{box:<8} {case:<11} {rail_mm:6.0f} {pan_s:6.2f} "
+            f"{tilt_s:7.2f} {spray_s:8.1f}   "
+            f"{','.join(crosses) if crosses else '-'}")
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+    for i, old in enumerate(lines):
+        bare = old.split("#")[0].split()
+        if len(bare) >= 2 and bare[0].upper() == box and bare[1] == case:
+            lines[i] = line
+            path.write_text(NL_.join(lines) + NL_, encoding="utf-8")
+            return "updated"
+
+    lines.append(line)
+    path.write_text(NL_.join(lines) + NL_, encoding="utf-8")
+    return "added"
+
+
+JOG = {"d": ("pan", +0.1), "a": ("pan", -0.1),
+       "w": ("tilt", +0.1), "s": ("tilt", -0.1),
+       "D": ("pan", +0.4), "A": ("pan", -0.4),
+       "W": ("tilt", +0.4), "S": ("tilt", -0.4)}
+
+
+def teach(hw, cell, taught, use_rail, stops):
+    """
+    Jog the axes until the aim looks right, then save what was jogged.
+
+    Typing durations blind and watching what happens is a slow way to
+    find them. Here each nudge runs immediately and is added to a
+    running total, so the numbers that end up in boxes.txt are exactly
+    the motion you watched and approved - which is the only sense in
+    which they can be verified at all, since nothing measures where
+    these axes point.
+    """
+    box = cell["name"].upper()
+    existing = taught.get(box, [])
+    print("")
+    print(f"  Teaching {box}. Existing cases: "
+          + (", ".join(c["case"] for c in existing) or "none"))
+    name = input("  Name for this case [direct]: ").strip() or "direct"
+
+    start = dict(hw.angle)
+    totals = {"pan": 0.0, "tilt": 0.0}
+    rail_mm = hw.rail_cm * 10.0
+    spray_s = 2.0
+
+    print("")
+    print("    a / d   jog pan left / right by 0.1s   (A / D for 0.4s)")
+    print("    s / w   jog tilt down / up by 0.1s     (S / W for 0.4s)")
+    print("    [ / ]   rail back / forward 10 mm")
+    print("    t       test the spray here")
+    print("    p 1.5   set the spray to 1.5 seconds")
+    print("    0       undo everything, back to the start")
+    print("    k       keep it, c to cancel")
+
+    while True:
+        print(f"{NL_}    pan {totals['pan']:+.2f}s  tilt {totals['tilt']:+.2f}s"
+              f"  rail {rail_mm:.0f}mm  spray {spray_s:.1f}s")
+        try:
+            said = input("    > ").strip()
+        except EOFError:
+            return None
+        if not said:
+            continue
+
+        if said in JOG:
+            axis, secs = JOG[said]
+            hw.drive(axis, 1 if secs > 0 else -1)
+            RP.wait(hw, abs(secs))
+            hw.stop(axis)
+            RP.wait(hw, RP.SETTLE_S)
+            totals[axis] += secs
+        elif said in ("[", "]") and use_rail:
+            rail_mm += 10.0 if said == "]" else -10.0
+            hw.rail_to(rail_mm / 10.0)
+        elif said in ("[", "]"):
+            print("    rail is off")
+        elif said == "t":
+            hw.valve(True)
+            RP.wait(hw, spray_s)
+            hw.valve(False)
+        elif said.startswith("p"):
+            try:
+                spray_s = float(said[1:].strip())
+            except ValueError:
+                print("    try: p 1.5")
+        elif said == "0":
+            for axis in ("tilt", "pan"):
+                if abs(totals[axis]) >= RP.MIN_MOVE_S:
+                    hw.drive(axis, -1 if totals[axis] > 0 else 1)
+                    RP.wait(hw, abs(totals[axis]))
+                    hw.stop(axis)
+            totals = {"pan": 0.0, "tilt": 0.0}
+            hw.angle.update(start)
+        elif said == "c":
+            print("    cancelled, nothing saved")
+            return None
+        elif said == "k":
+            raw = input("    Boxes the spray crosses, comma separated "
+                        "[-]: ").strip()
+            crosses = [] if raw in ("", "-") else [
+                b.strip().upper() for b in raw.split(",")]
+            what = save_case(box, name, rail_mm, totals["pan"],
+                             totals["tilt"], spray_s, crosses)
+            print(f"    {what} {box} '{name}' in boxes.txt")
+            return load_taught()
+        else:
+            print("    not a command")
 
 
 def centre_shot(cell, rail, params):
@@ -479,6 +599,17 @@ def main(argv=None):
                 hw.angle["pan"] = 0.0
                 hw.angle["tilt"] = 0.0
                 print("  Noted - this position is now neutral.")
+                continue
+
+            if said.startswith("t") and said[1:].strip().isdigit():
+                idx = int(said[1:].strip())
+                if not 0 <= idx < len(cells):
+                    print(f"  There is no box {idx}.")
+                    continue
+                got = teach(hw, cells[idx], taught,
+                            not args.no_rail, stops)
+                if got is not None:
+                    taught = got
                 continue
 
             if said == "all":
