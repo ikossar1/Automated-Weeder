@@ -344,7 +344,7 @@ def teach(hw, cell, taught, use_rail, stops, history=None):
         print(f"    TEACHING {box} - one keypress, no Enter needed")
         print("      arrows  left / right pan, up / down tilt")
         if use_rail:
-            print("      s / j   rail right / left 1 cm")
+            print(f"      s / j   rail right / left {RP.RAIL_JOG_CM:.0f} cm")
         print("      f       change the step size")
         print("      t       valve OPEN, t again to SHUT")
         print("      + / -   nudge the spray time, p to type it")
@@ -382,7 +382,7 @@ def teach(hw, cell, taught, use_rail, stops, history=None):
             if not use_rail:
                 print("    rail is off")
                 continue
-            rail_mm += RAIL_KEY[said] * 10.0
+            rail_mm += RAIL_KEY[said] * RP.RAIL_JOG_CM * 10.0
             hw.rail_to(rail_mm / 10.0)
         elif said == "f":
             step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
