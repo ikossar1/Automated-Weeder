@@ -49,9 +49,9 @@ rail_steps_per_cm = 2000
 # Seconds per half pulse. start_delay is the first step - a stepper
 # cannot begin at full rate, and if it buzzes without moving this is
 # the number to raise.
-rail_step_delay   = 0.00040
+rail_step_delay   = 0.00008
 rail_start_delay  = 0.0025
-rail_ramp_steps   = 120
+rail_ramp_steps   = 600
 rail_travel_cm    = 35
 # true if DIR high moves away from the home stop
 rail_dir_forward  = true

@@ -286,18 +286,14 @@ def read_key(prompt="    > "):
 
 def teach(hw, cell, taught, use_rail, stops):
     """
-    Aim first, then time the spray. Two steps, in that order.
+    Jog and spray in the same loop, and save what was last sprayed from.
 
-    They are separate problems and mixing them makes both harder: while
-    the nozzle is still pointing at the wrong place, the puddle tells
-    you nothing about how long the valve should be open. So the aim is
-    settled and locked, and only then is the spray timed against a
-    target that is no longer moving.
-
-    Nothing measures where these axes point, so what gets saved is the
-    motion that was watched and approved. That is the whole of the
-    verification, and it is why the spray has to be fired before a case
-    can be kept.
+    Aiming and timing are not really separable on this machine: where
+    the mulch lands is the only readout either of them has, and you get
+    it by firing. So the valve is available throughout, and the position
+    recorded is the one it was last fired from - jogging on afterwards
+    is how you look for something better, not how you withdraw what
+    already worked.
     """
     box = cell["name"].upper()
     print("")
@@ -309,123 +305,97 @@ def teach(hw, cell, taught, use_rail, stops):
     totals = {"pan": 0.0, "tilt": 0.0}
     rail_mm = hw.rail_cm * 10.0
     spray_s = 2.0
-    fired = False
     step = STEPS[0]
+    approved = None
 
-    def undo():
-        for axis in ("tilt", "pan"):
-            if abs(totals[axis]) >= RP.MIN_MOVE_S:
-                hw.drive(axis, -1 if totals[axis] > 0 else 1)
-                RP.wait(hw, abs(totals[axis]))
-                hw.stop(axis)
-        totals.update({"pan": 0.0, "tilt": 0.0})
-        hw.angle.update(start)
+    print("")
+    print("    arrows  left / right pan, up / down tilt")
+    if use_rail:
+        print("    s / j   rail right / left 1 cm")
+    print("    f       step size      t  spray from here")
+    print("    + / -   spray time     p  type the spray time")
+    print("    0       undo it all    k  keep it, c to cancel")
 
     while True:
-        # ---- step 1: point it at the right place --------------------
-        print("")
-        print(f"  STEP 1 of 2 - AIM {box}.  The valve stays shut.")
-        print("    arrows  left / right pan, up / down tilt")
-        if use_rail:
-            print("    s / j   rail right / left 1 cm")
-        print("    f       change the step size")
-        print("    0       undo it all      n  aim is right, go on")
-        print("    c       cancel")
+        mark = ""
+        if approved is not None:
+            mark = (f"   (sprayed from pan {approved['pan']:+.2f}"
+                    f" tilt {approved['tilt']:+.2f})")
+        print(f"{NL_}    pan {totals['pan']:+.2f}s  tilt {totals['tilt']:+.2f}s"
+              f"  rail {rail_mm:.0f}mm  step {step:.1f}s"
+              f"  spray {spray_s:.1f}s{mark}")
+        try:
+            said = read_key("    > ")
+        except EOFError:
+            return None
+        if not said:
+            continue
 
-        while True:
-            print(f"{NL_}    pan {totals['pan']:+.2f}s  "
-                  f"tilt {totals['tilt']:+.2f}s  rail {rail_mm:.0f}mm"
-                  f"   step {step:.1f}s")
-            try:
-                said = read_key("    aim > ")
-            except EOFError:
-                return None
-            if not said:
+        if said in JOG:
+            axis, way = JOG[said]
+            hw.drive(axis, way)
+            RP.wait(hw, step)
+            hw.stop(axis)
+            RP.wait(hw, RP.SETTLE_S)
+            totals[axis] += way * step
+        elif said in RAIL_KEY:
+            if not use_rail:
+                print("    rail is off")
                 continue
-            if said in JOG:
-                axis, way = JOG[said]
-                secs = way * step
-                hw.drive(axis, way)
-                RP.wait(hw, step)
-                hw.stop(axis)
-                RP.wait(hw, RP.SETTLE_S)
-                totals[axis] += secs
-            elif said in RAIL_KEY:
-                if not use_rail:
-                    print("    rail is off")
+            rail_mm += RAIL_KEY[said] * 10.0
+            hw.rail_to(rail_mm / 10.0)
+        elif said == "f":
+            step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
+        elif said == "t":
+            hw.valve(True)
+            RP.wait(hw, spray_s)
+            hw.valve(False)
+            approved = {"pan": totals["pan"], "tilt": totals["tilt"],
+                        "rail_mm": rail_mm, "spray_s": spray_s}
+            print("    noted - this is what k will save")
+        elif said in ("+", "-"):
+            spray_s = max(0.1, spray_s + (0.2 if said == "+" else -0.2))
+        elif said == "p":
+            try:
+                spray_s = max(0.1, float(input("    seconds: ").strip()))
+            except ValueError:
+                print("    that is not a number")
+        elif said == "0":
+            for axis in ("tilt", "pan"):
+                if abs(totals[axis]) >= RP.MIN_MOVE_S:
+                    hw.drive(axis, -1 if totals[axis] > 0 else 1)
+                    RP.wait(hw, abs(totals[axis]))
+                    hw.stop(axis)
+            totals.update({"pan": 0.0, "tilt": 0.0})
+            hw.angle.update(start)
+        elif said == "c":
+            print("    cancelled, nothing saved")
+            return None
+        elif said == "k":
+            keep = approved
+            if keep is None:
+                print("    Not sprayed yet, so nothing has been seen to")
+                print("    work. Press t first, or k again to save anyway.")
+                if read_key("    > ") != "k":
                     continue
-                rail_mm += RAIL_KEY[said] * 10.0
-                hw.rail_to(rail_mm / 10.0)
-            elif said == "f":
-                step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
-            elif said == "0":
-                undo()
-            elif said == "c":
-                print("    cancelled, nothing saved")
-                return None
-            elif said == "n":
-                break
-            else:
-                print("    not a command")
-
-        # ---- step 2: time the spray, aim held still -----------------
-        print("")
-        print(f"  STEP 2 of 2 - SPRAY.  Aim is locked at pan "
-              f"{totals['pan']:+.2f}s, tilt {totals['tilt']:+.2f}s.")
-        print("    t       spray for the time shown")
-        print("    + / -   change it by 0.2s     p  type it exactly")
-        print("    b       back to aiming        k  keep and save")
-        print("    c       cancel")
-
-        back = False
-        while True:
-            print(f"{NL_}    spray {spray_s:.1f}s"
-                  + ("" if fired else "   (not fired yet)"))
-            try:
-                said = read_key("    spray > ")
-            except EOFError:
-                return None
-            if not said:
-                continue
-            if said == "t":
-                hw.valve(True)
-                RP.wait(hw, spray_s)
-                hw.valve(False)
-                fired = True
-            elif said in ("+", "-"):
-                spray_s = max(0.1, spray_s + (0.2 if said == "+" else -0.2))
-            elif said == "p":
-                try:
-                    spray_s = max(0.1, float(input("    seconds: ").strip()))
-                except ValueError:
-                    print("    that is not a number")
-            elif said == "b":
-                back = True
-                break
-            elif said == "c":
-                print("    cancelled, nothing saved")
-                return None
-            elif said == "k":
-                if not fired:
-                    print("    Not sprayed yet, so the timing has not been")
-                    print("    seen. Press t first, or k again to save it.")
-                    if input("    > ").strip() != "k":
-                        continue
-                raw = input("    Boxes the spray crosses, comma "
-                            "separated [-]: ").strip()
-                crosses = [] if raw in ("", "-") else [
-                    b.strip().upper() for b in raw.split(",")]
-                what = save_case(box, name, rail_mm, totals["pan"],
-                                 totals["tilt"], spray_s, crosses)
-                print(f"    {what} {box} '{name}': pan {totals['pan']:+.2f}s, "
-                      f"tilt {totals['tilt']:+.2f}s, spray {spray_s:.1f}s")
-                return load_taught()
-            else:
-                print("    not a command")
-
-        if not back:
-            break
-    return None
+                keep = {"pan": totals["pan"], "tilt": totals["tilt"],
+                        "rail_mm": rail_mm, "spray_s": spray_s}
+            elif (abs(keep["pan"] - totals["pan"]) > 1e-9
+                    or abs(keep["tilt"] - totals["tilt"]) > 1e-9):
+                print(f"    Saving where it sprayed from "
+                      f"(pan {keep['pan']:+.2f}s, tilt {keep['tilt']:+.2f}s),")
+                print("    not where the jogging left it.")
+            raw = input("    Boxes the spray crosses, comma "
+                        "separated [-]: ").strip()
+            crosses = [] if raw in ("", "-") else [
+                b.strip().upper() for b in raw.split(",")]
+            what = save_case(box, name, keep["rail_mm"], keep["pan"],
+                             keep["tilt"], keep["spray_s"], crosses)
+            print(f"    {what} {box} '{name}': pan {keep['pan']:+.2f}s, "
+                  f"tilt {keep['tilt']:+.2f}s, spray {keep['spray_s']:.1f}s")
+            return load_taught()
+        else:
+            print("    not a command")
 
 
 def centre_shot(cell, rail, params):
