@@ -35,6 +35,8 @@ import run_plan as RP
 NL_ = chr(10)
 
 MAPS = HERE.parent / "mapping" / "maps"
+BOXES_FILE = HERE / "boxes.txt"
+EXAMPLE_FILE = HERE / "boxes.example.txt"
 
 
 def newest_map():
@@ -47,6 +49,13 @@ def newest_map():
     return sorted(beds, key=lambda d: -d.stat().st_mtime)[0]
 
 
+# The four boxes keep the numbers they already had, so nothing taught
+# so far has to be renumbered. 3 and 5 are no longer boxes - they are
+# the two x translations, which are taught and fired the same way but
+# move the rail instead of aiming at anything.
+BOX_SLOTS = [0, 1, 2, 4]
+X_SLOTS = {3: "X_FWD", 5: "X_BACK"}
+
 RAIL_KEYS = "abcdefgh"
 
 
@@ -55,79 +64,73 @@ def rail_stops(step_mm, count):
     return [(RAIL_KEYS[i], i * step_mm / 10.0) for i in range(count)]
 
 
-def draw(cells, cols, rows, done, hw=None, stops=()):
+def draw(cells, cols, rows, done, hw=None, stops=(), taught=None):
     """
-    The grid, as text.
+    The boxes and the x translations, in one picture.
 
-    Columns run left to right as x grows, rows top to bottom as y grows,
-    which is the same orientation as the map image - so what you see here
-    and what you saw on the laptop are the same way up.
+    Both are things you press a number for and both are taught the same
+    way, so they belong on one screen - with what each one actually does
+    written next to it, because a bare number says nothing about whether
+    it has been taught or what it would do if pressed.
     """
-    by_name = {c["name"]: c for c in cells}
-    width = 7
+    taught = taught or {}
+    by_slot = {}
+    for n, cell in enumerate(cells):
+        if n < len(BOX_SLOTS):
+            by_slot[BOX_SLOTS[n]] = cell
 
-    # The rail stops print down the right of the grid, so the two things
-    # the operator can choose - which box to aim at, and where along the
-    # rail to stand - are read in one glance rather than two menus.
-    gap = "     "
-    head = "    " + "".join(f"{'C' + str(c + 1):^{width}}" for c in range(cols))
-    if stops:
-        head += gap + "rail"
     print("")
-    print(head)
-
+    print("        " + "".join(f"{'C' + str(c + 1):^9}" for c in range(cols))
+          + "      x translation")
     for r in range(rows):
-        line = f" R{r + 1} "
+        line = f"   R{r + 1}  "
         for c in range(cols):
-            cell = by_name.get(f"C{c + 1}R{r + 1}")
+            n = r * cols + c
+            cell = cells[n] if n < len(cells) else None
             if cell is None:
-                line += f"{'':^{width}}"
+                line += f"{'':^9}"
             elif cell["count"]:
-                line += f"{'[crop]':^{width}}"
+                line += f"{'[crop]':^9}"
             elif cell["name"] in done:
-                line += f"{'done':^{width}}"
+                line += f"{'done':^9}"
             else:
-                line += f"{str(cell['index']):^{width}}"
-        if r < len(stops):
-            key, cm = stops[r]
-            here = ""
-            if hw is not None and abs(hw.rail_cm - cm) < 0.2:
-                here = "  <- here"
-            line += f"{gap} {key}  {cm * 10:3.0f} mm{here}"
+                line += f"{str(cell['index']):^9}"
+        slots = sorted(X_SLOTS)
+        if r < len(slots):
+            slot = slots[r]
+            name = X_SLOTS[slot]
+            cases = taught.get(name, [])
+            what = (f"{cases[0]['rail_mm']:+.0f} mm" if cases
+                    else "not taught")
+            line += f"      {slot}   {name.lower():<7} {what}"
         print(line)
 
-    # Any stops past the last grid row carry on underneath it.
-    for key, cm in stops[rows:]:
-        pad = "    " + " " * (width * cols)
-        here = ""
-        if hw is not None and abs(hw.rail_cm - cm) < 0.2:
-            here = "  <- here"
-        print(f"{pad}{gap} {key}  {cm * 10:3.0f} mm{here}")
-    if hw is not None:
-        # Where the code thinks the axes are. This is a running total of
-        # what it has commanded, not a measurement - nothing on this
-        # machine reports an angle back. If it disagrees with what you
-        # can see, the belief is what is wrong, and z fixes it.
-        print(f"  Believed now: pan {hw.angle['pan']:+.0f}, "
-              f"tilt {hw.angle['tilt']:+.0f} deg")
     print("")
-    print("  [crop] holds a plant and cannot be sprayed.")
-    print("  number  aim at that box      letter  move the rail there")
-    print("  all     spray every free box, in order")
-    print("  t3      teach box 3 - jog it, test it, save it")
-    print("  jog     move it about without teaching anything")
-    print("  cases   list what has been taught")
-    print("  del     remove a taught case")
-    print("  n       back to neutral")
-    print("  r       retrace backwards, valve shut")
-    print("  z       call this position neutral")
-    print("  q       finish")
+    print("   What each one does:")
+    for slot in sorted(list(by_slot) + list(X_SLOTS)):
+        if slot in by_slot:
+            cell = by_slot[slot]
+            cases = taught.get(cell["name"].upper(), [])
+            label = f"box {cell['name']}"
+            if cell["count"]:
+                detail = "holds a crop, will not be sprayed"
+            elif not cases:
+                detail = "not taught yet"
+            else:
+                detail = ", ".join(c["case"] for c in cases)
+        else:
+            name = X_SLOTS[slot]
+            cases = taught.get(name, [])
+            label = f"x move {name.lower()}"
+            detail = (", ".join(f"{c['case']} {c['rail_mm']:+.0f}mm"
+                                for c in cases) if cases else "not taught yet")
+        print(f"     {slot}   {label:<14} {detail}")
 
-
-BOXES_FILE = HERE / "boxes.txt"
-
-
-EXAMPLE_FILE = HERE / "boxes.example.txt"
+    if hw is not None:
+        print("")
+        print(f"   Believed now: pan {hw.angle['pan']:+.0f}, "
+              f"tilt {hw.angle['tilt']:+.0f} deg, rail "
+              f"{hw.rail_cm * 10:.0f} mm")
 
 
 def load_taught(path=BOXES_FILE):
@@ -165,6 +168,7 @@ def load_taught(path=BOXES_FILE):
     return out
 
 
+
 def choose_case(name, cases, occupied):
     """
     The first case whose spray does not pass over a planted box.
@@ -181,6 +185,7 @@ def choose_case(name, cases, occupied):
             return case, None
         last = blocked
     return None, last
+
 
 
 def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
@@ -221,6 +226,7 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
     print("    back to the start")
     drive("tilt", -m["tilt_s"])
     drive("pan", -m["pan_s"])
+
 
 
 def save_case(box, case, rail_mm, pan_s, tilt_s, spray_s, crosses,
@@ -312,6 +318,56 @@ def read_key(prompt="    > "):
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         print()
+
+
+def teach_x(hw, name, taught, use_rail):
+    """
+    Teach one x translation: drive the rail, keep the distance.
+
+    Separate from the boxes on purpose. Moving along the bed and aiming
+    at something are different jobs, and tying them together was what
+    made a box press drag the rail back to where the aiming geometry
+    thought it should be. Here the rail is the whole of it - no pan, no
+    tilt, no valve.
+    """
+    if not use_rail:
+        print("  The rail is off, so there is nothing to teach.")
+        return None
+
+    print("")
+    print(f"  Teaching {name.lower()}. Existing: "
+          + (", ".join(c["case"] for c in taught.get(name, [])) or "none"))
+    case = input("  Name for this case [standard]: ").strip() or "standard"
+
+    begin = hw.rail_cm
+    print("")
+    print(f"    s / j   rail right / left {RP.RAIL_JOG_CM:.0f} cm")
+    print("    0       back to where this started")
+    print("    k       keep the distance      c  cancel")
+
+    while True:
+        moved = (hw.rail_cm - begin) * 10.0
+        print(f"{NL_}    moved {moved:+.0f} mm from where you began")
+        try:
+            said = read_key(f"    teach {name.lower()} > ")
+        except EOFError:
+            return None
+        if said in RAIL_KEY:
+            hw.rail_to(hw.rail_cm + RAIL_KEY[said] * RP.RAIL_JOG_CM)
+        elif said == "0":
+            hw.rail_to(begin)
+        elif said == "c":
+            print("    cancelled, nothing saved")
+            return None
+        elif said == "k":
+            if abs(moved) < 0.5:
+                print("    It has not moved. Drive it somewhere first.")
+                continue
+            what = save_case(name, case, moved, 0.0, 0.0, 0.0, [])
+            print(f"    {what} {name.lower()} '{case}': {moved:+.0f} mm")
+            return load_taught()
+        elif said:
+            print("    s, j, 0, k or c")
 
 
 def teach(hw, cell, taught, use_rail, stops, history=None):
@@ -526,7 +582,7 @@ def main(argv=None):
                     help="bed width cm, across the rail (default 30.5)")
     ap.add_argument("--depth", type=float, default=35.0,
                     help="bed depth cm, along the rail (default 35)")
-    ap.add_argument("--cols", type=int, default=4)
+    ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--max-turn", type=float, default=RP.MAX_DRIVE_S["pan"],
                     help="longest single pan drive, seconds")
@@ -674,7 +730,7 @@ def main(argv=None):
 
     cells = SB.build_cells(bed, plants, args.cols, args.rows)
     for i, c in enumerate(cells):
-        c["index"] = i
+        c["index"] = BOX_SLOTS[i] if i < len(BOX_SLOTS) else i
         if args.all_boxes:
             # For a movement test the plants do not matter - what is
             # wanted is every box reachable, so the head can be sent
@@ -696,7 +752,7 @@ def main(argv=None):
     history = []
     try:
         while True:
-            draw(cells, args.cols, args.rows, done, hw, stops)
+            draw(cells, args.cols, args.rows, done, hw, stops, taught)
             try:
                 said = input("  > ").strip().lower()
             except EOFError:
@@ -807,10 +863,16 @@ def main(argv=None):
 
             if said.startswith("t") and said[1:].strip().isdigit():
                 idx = int(said[1:].strip())
-                if not 0 <= idx < len(cells):
-                    print(f"  There is no box {idx}.")
+                if idx in X_SLOTS:
+                    got = teach_x(hw, X_SLOTS[idx], taught,
+                                  not args.no_rail)
+                    if got is not None:
+                        taught = got
                     continue
-                got = teach(hw, cells[idx], taught,
+                if idx not in BOX_SLOTS:
+                    print(f"  There is no {idx}.")
+                    continue
+                got = teach(hw, cells[BOX_SLOTS.index(idx)], taught,
                             not args.no_rail, stops, history)
                 if got is not None:
                     taught = got
@@ -922,6 +984,28 @@ def main(argv=None):
             if not said:
                 continue
 
+            if said.isdigit() and int(said) in X_SLOTS:
+                name = X_SLOTS[int(said)]
+                cases = taught.get(name, [])
+                if not cases:
+                    print(f"  {name.lower()} is not taught yet - "
+                          f"use t{said}.")
+                    continue
+                if args.no_rail:
+                    print("  rail is off")
+                    continue
+                move = cases[0]["rail_mm"]
+                print(f"  {name.lower()}: rail {move:+.0f} mm")
+                hw.valve(False)
+                was = RP.MAX_DRIVE_STEPS
+                RP.MAX_DRIVE_STEPS = 40
+                try:
+                    hw.rail_to(hw.rail_cm + move / 10.0)
+                finally:
+                    RP.MAX_DRIVE_STEPS = was
+                print(f"  rail now at {hw.rail_cm * 10:.0f} mm")
+                continue
+
             try:
                 idx = int(said)
             except ValueError:
@@ -944,7 +1028,10 @@ def main(argv=None):
                 print(f"  There is no box {idx}.")
                 continue
 
-            cell = cells[idx]
+            if idx not in BOX_SLOTS:
+                print(f"  There is no {idx}.")
+                continue
+            cell = cells[BOX_SLOTS.index(idx)]
             if cell["count"]:
                 print(f"  Box {idx} holds a plant. Pick another.")
                 continue
