@@ -63,12 +63,12 @@ rail_steps_per_cm = 2000
 # microsteps. Setting the EasyDriver to full steps (MS1 and MS2 low)
 # makes every pulse eight times bigger, so the same pulse rate gives
 # eight times the speed. Then set rail_steps_per_cm to 250.
-rail_step_delay   = 0.0000133
+rail_step_delay   = 0.00040
 rail_start_delay  = 0.0025
 rail_ramp_steps   = 2000
 rail_travel_cm    = 35
 # How far one press of s or j moves the rail, in cm.
-rail_jog_cm       = 4
+rail_jog_cm       = 5
 # true if DIR high moves away from the home stop
 rail_dir_forward  = true
 
