@@ -138,11 +138,23 @@ def main(argv=None):
             pass
 
     server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
-    host = socket.gethostbyname(socket.gethostname())
+    # gethostbyname gives 127.0.1.1 on Debian, which is useless from
+    # another machine. Opening a socket towards anywhere reveals which
+    # address this host would actually be reached on - no traffic is
+    # sent, the connect just picks the route.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("10.255.255.255", 1))
+        host = probe.getsockname()[0]
+    except OSError:
+        host = socket.gethostbyname(socket.gethostname())
+    finally:
+        probe.close()
     print("")
     print(f"  {photo.name}  -  open this and click the four corners:")
     print("")
-    print(f"      http://localhost:{args.port}        (VS Code forwards this)")
+    print(f"      http://localhost:{args.port}"
+          f"        <- ctrl-click this, VS Code forwards it")
     print(f"      http://{host}:{args.port}     (same network)")
     print("")
     print("  Order: near-left, near-right, far-right, far-left.")

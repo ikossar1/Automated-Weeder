@@ -203,7 +203,8 @@ def load_taught(path=BOXES_FILE):
         try:
             case = {
                 "case": bits[1],
-                "rail_mm": float(bits[2]), "pan_s": float(bits[3]),
+                "rail_mm": None if bits[2] == "-" else float(bits[2]),
+                "pan_s": float(bits[3]),
                 "tilt_s": float(bits[4]), "spray_s": float(bits[5]),
                 "crosses": [] if bits[6] == "-" else
                            [b.strip().upper() for b in bits[6].split(",")],
@@ -258,7 +259,8 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
 
     hw.valve(False)
     rail_before = hw.rail_cm
-    if use_rail:
+    moves_rail = use_rail and m["rail_mm"] is not None
+    if moves_rail:
         hw.rail_to(m["rail_mm"] / 10.0)
 
     print(f"    pan {m['pan_s']:+.2f}s, tilt {m['tilt_s']:+.2f}s")
@@ -278,7 +280,7 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
     hw.valve(False)
     drive("tilt", -m["tilt_s"])
     drive("pan", -m["pan_s"])
-    if use_rail and abs(hw.rail_cm - rail_before) > 0.05:
+    if moves_rail and abs(hw.rail_cm - rail_before) > 0.05:
         hw.rail_to(rail_before)
 
 
@@ -292,7 +294,9 @@ def save_case(box, case, rail_mm, pan_s, tilt_s, spray_s, crosses,
     The notes at the top of that file are the only explanation of what
     the columns mean, so they are preserved rather than regenerated.
     """
-    line = (f"{box:<8} {case:<11} {rail_mm:6.0f} {pan_s:6.2f} "
+    # A dash in the rail column means leave the rail where it is.
+    rail_txt = "-" if rail_mm is None else f"{rail_mm:.0f}"
+    line = (f"{box:<8} {case:<11} {rail_txt:>6} {pan_s:6.2f} "
             f"{tilt_s:7.2f} {spray_s:8.1f}   "
             f"{','.join(crosses) if crosses else '-'}")
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
@@ -447,6 +451,13 @@ def teach(hw, cell, taught, use_rail, stops, history=None):
     start = dict(hw.angle)
     totals = {"pan": 0.0, "tilt": 0.0}
     rail_mm = hw.rail_cm * 10.0
+    # Whether the rail was part of this lesson. A case used to record
+    # the rail's position whether or not you had touched it, so
+    # teaching a box while the rail happened to sit at -50 mm baked
+    # that in, and the box then dragged the rail there every time it
+    # ran. Boxes are pan and tilt; the rail is a, b and c - unless you
+    # say otherwise here by actually driving it.
+    rail_touched = False
     spray_s = 2.0
     step = STEPS[0]
     approved = None
@@ -496,6 +507,7 @@ def teach(hw, cell, taught, use_rail, stops, history=None):
                 print("    rail is off")
                 continue
             rail_mm += RAIL_KEY[said] * RP.RAIL_JOG_CM * 10.0
+            rail_touched = True
             hw.rail_to(rail_mm / 10.0)
         elif said == "f":
             step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
@@ -558,7 +570,8 @@ def teach(hw, cell, taught, use_rail, stops, history=None):
                         "separated [-]: ").strip()
             crosses = [] if raw in ("", "-") else [
                 b.strip().upper() for b in raw.split(",")]
-            what = save_case(box, name, keep["rail_mm"], keep["pan"],
+            rail_out = keep["rail_mm"] if rail_touched else None
+            what = save_case(box, name, rail_out, keep["pan"],
                              keep["tilt"], keep["spray_s"], crosses)
             # A taught case is a motion the machine has just performed,
             # so it belongs in the history like any other - otherwise

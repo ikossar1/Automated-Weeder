@@ -16,7 +16,9 @@
 #
 #   box       which box this reaches
 #   case      a name for it, yours to choose
-#   rail_mm   where to put the rail first, absolute, from home
+#   rail_mm   where to put the rail first, absolute, from home.
+#             A dash means leave the rail alone - which is what
+#             you want unless the rail was part of the lesson.
 #   pan_s     seconds to drive pan. NEGATIVE means the other way.
 #   tilt_s    seconds to drive tilt. NEGATIVE means the other way.
 #   spray_s   seconds to hold the valve open
