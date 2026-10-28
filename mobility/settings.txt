@@ -68,7 +68,7 @@ rail_start_delay  = 0.0025
 rail_ramp_steps   = 2000
 rail_travel_cm    = 35
 # How far one press of s or j moves the rail, in cm.
-rail_jog_cm       = 5
+rail_jog_cm       = 25
 # true if DIR high moves away from the home stop
 rail_dir_forward  = true
 
