@@ -218,6 +218,14 @@ def pick_candidates():
 def main():
     ap = argparse.ArgumentParser(description="Map a new photo.")
     P.add_arguments(ap)
+
+    ap.add_argument("--corners", type=float, nargs=8,
+
+                    metavar="N",
+
+                    help="the four corners as x y x y x y x y, "
+
+                         "so no window has to open here")
     args = ap.parse_args()
     if P.handle_flags(args):
         return
@@ -255,7 +263,14 @@ def main():
     # Corners belong to one photo, so a preset can only replay them when
     # it is the same photo. Reusing yesterday's corners on today's picture
     # produces a clean map of nowhere.
-    if "corners" in a.preset:
+    if args.corners:
+        # Picked somewhere else - on a laptop, where a window can open -
+        # and handed over as eight numbers. The clicking needs a screen;
+        # the mapping does not, so this is the seam between them.
+        corners = [str(v) for v in args.corners]
+        a.record("corners", corners)
+        print(f"{chr(10)}Corners: {' '.join(corners)}   (given on the command line)")
+    elif "corners" in a.preset:
         corners = [str(v) for v in a.preset["corners"]]
         a.record("corners", corners)
         print(f"\nCorners: {' '.join(corners)}   (preset)")

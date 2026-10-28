@@ -122,6 +122,13 @@ def save_corners(pts, out_path):
     """
     flat = [round(float(v), 1) for p in pts for v in p]
     pathlib.Path(out_path).write_text(json.dumps({"corners": flat}))
+
+    # Printed as well as written, so the four corners can be carried
+    # to a machine with no screen to click on.
+    print()
+    print("Corners. To map this photo somewhere without a window:")
+    print("    python3 new_bed.py --corners "
+          + " ".join(str(v) for v in flat))
     return flat
 
 
