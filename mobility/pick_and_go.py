@@ -31,6 +31,8 @@ import simulate as S
 import spray_box as SB
 import run_plan as RP
 
+NL_ = chr(10)
+
 MAPS = HERE.parent / "mapping" / "maps"
 
 
@@ -110,6 +112,7 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
     print("")
     print("  [crop] holds a plant and cannot be sprayed.")
     print("  number  aim at that box      letter  move the rail there")
+    print("  all     spray every free box, in order")
     print("  n       back to neutral")
     print("  r       retrace backwards, valve shut")
     print("  z       call this position neutral")
@@ -205,7 +208,8 @@ def main(argv=None):
                     metavar="SEC", help="longest one drive may run")
     ap.add_argument("--drive-steps", type=int, default=RP.MAX_DRIVE_STEPS,
                     help="how many drives one move may be split into")
-    ap.add_argument("--tilt-down", type=float, default=0.0, metavar="DEG",
+    ap.add_argument("--tilt-down", type=float, default=RP.TILT_DOWN,
+                    metavar="DEG",
                     help="tip every shot this many degrees further down, "
                          "to correct a mount whose zero is not level")
     ap.add_argument("--one-shot", action="store_true",
@@ -376,6 +380,40 @@ def main(argv=None):
                 hw.angle["pan"] = 0.0
                 hw.angle["tilt"] = 0.0
                 print("  Noted - this position is now neutral.")
+                continue
+
+            if said == "all":
+                # The map decides the order, not the operator. This is
+                # what the mapping stage is for: the boxes with crops in
+                # them were already ruled out when the grid was built,
+                # so going through what is left needs no further
+                # judgement - only confirmation before it starts.
+                todo = [c for c in cells
+                        if not c["count"] and c["name"] not in done]
+                if not todo:
+                    print("  Nothing left to spray.")
+                    continue
+                print(f"  {len(todo)} free box(es): "
+                      f"{', '.join(c['name'] for c in todo)}")
+                if input("  Spray all of them? (y/N): ").strip().lower()                         not in ("y", "yes"):
+                    continue
+                for cell in todo:
+                    print(f"{NL_}  {cell['name']}...")
+                    rows = plan_one(cell, cells, aim_plants, bed, rail,
+                                    params, one_shot=args.one_shot
+                                    or args.all_boxes)
+                    if not rows or not any(
+                            str(r["spray"]).strip() == "1" for r in rows):
+                        print("    nothing reachable, skipped")
+                        continue
+                    RP.run(hw, rows, rehome_every_box=True,
+                           max_turn=args.max_turn, use_rail=False,
+                           tilt_bias=args.tilt_down)
+                    history.append((cell["name"],
+                                    float(rows[-1]["pan_deg"]),
+                                    float(rows[-1]["tilt_deg"])))
+                    done.add(cell["name"])
+                print("  All done.")
                 continue
 
             if said == "r":

@@ -232,6 +232,84 @@ TILT_LIMIT = 80.0
 
 # ---------------------------------------------------------------------------
 
+SETTINGS_FILE = pathlib.Path(__file__).with_name("settings.txt")
+
+
+def load_settings(path=SETTINGS_FILE):
+    """
+    Read settings.txt over the top of the values above.
+
+    Every number worth changing lives in one plain text file, so tuning
+    the machine does not mean editing code. A bad or missing line is
+    reported and the built-in value stands - a typo should cost you a
+    warning, not a crash halfway through a run.
+    """
+    if not path.exists():
+        return {}
+
+    g = globals()
+    simple = {
+        "duty": "DUTY", "pwm_hz": "PWM_HZ", "home_duty": "HOME_DUTY",
+        "max_drive": "MAX_DRIVE_S_HARD", "drive_steps": "MAX_DRIVE_STEPS",
+        "min_move": "MIN_MOVE_S", "settle": "SETTLE_S",
+        "pan_limit": "PAN_LIMIT", "tilt_limit": "TILT_LIMIT",
+        "near_vertical": "NEAR_VERTICAL_DEG",
+        "rail_steps_per_cm": "RAIL_STEPS_PER_CM",
+        "rail_step_delay": "RAIL_STEP_DELAY",
+        "rail_start_delay": "RAIL_START_DELAY",
+        "rail_ramp_steps": "RAIL_RAMP_STEPS",
+        "rail_travel_cm": "RAIL_TRAVEL_CM",
+        "valve_pulse": "VALVE_PULSE_S",
+    }
+    ints = {"MAX_DRIVE_STEPS", "RAIL_RAMP_STEPS", "PWM_HZ"}
+    read = {}
+
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            print(f"  settings.txt line {n}: no '=', ignored")
+            continue
+        key, _, raw = line.partition("=")
+        key, raw = key.strip().lower(), raw.strip()
+
+        try:
+            if key in ("invert_pan", "invert_tilt"):
+                INVERT[key.split("_")[1]] = raw.lower() in ("true", "yes", "1")
+            elif key == "rail_dir_forward":
+                g["RAIL_DIR_FORWARD"] = raw.lower() in ("true", "yes", "1")
+            elif key == "pan_speed":
+                SPEED_DEG_FULL["pan"] = float(raw)
+            elif key == "tilt_speed":
+                SPEED_DEG_FULL["tilt"] = float(raw)
+            elif key == "tilt_down":
+                g["TILT_DOWN"] = float(raw)
+            elif key in simple:
+                name = simple[key]
+                g[name] = int(raw) if name in ints else float(raw)
+            else:
+                print(f"  settings.txt line {n}: '{key}' is not a setting")
+                continue
+        except ValueError:
+            print(f"  settings.txt line {n}: '{raw}' is not a number, ignored")
+            continue
+        read[key] = raw
+
+    # Everything derived from the above has to be worked out again.
+    g["SPEED_DEG"] = {a: v * DUTY / 100.0 for a, v in SPEED_DEG_FULL.items()}
+    g["SPEED"] = {"pan": SPEED_DEG["pan"], "tilt": SPEED_DEG["tilt"]}
+    g["MAX_DRIVE_S"] = {a: min(MAX_DRIVE_S_HARD,
+                               round(MAX_DRIVE_DEG[a] / SPEED_DEG[a] * GRACE, 2))
+                        for a in MAX_DRIVE_DEG}
+    g["MAX_TURN_S"] = MAX_DRIVE_S["pan"]
+    return read
+
+
+TILT_DOWN = 0.0
+_SETTINGS = load_settings()
+
+
 def _hold(seconds):
     """
     Wait a very short time, accurately.

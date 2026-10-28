@@ -1,0 +1,62 @@
+# Machine settings. Edit the numbers, save, run again - no code involved.
+#
+# Anything after a # is a note. Blank lines are fine. If a line is wrong
+# or missing the built-in value is used and the run tells you so.
+
+# ---- motor power --------------------------------------------------
+# Percent of full power. Lower is slower. Below about 10 a small DC
+# motor hums without turning.
+duty            = 15
+# Switching frequency, Hz. Low frequencies give more push per pulse,
+# which is what makes a low duty actually turn the shaft.
+pwm_hz          = 100
+# Power used for homing the rail, which is a blind run into a stop.
+home_duty       = 70
+
+# ---- how fast the DC axes turn, at FULL power, degrees per second ---
+# Measure with:  python3 run_plan.py --time-axis pan
+# Believing an axis is SLOWER than it is makes moves overshoot, so when
+# a measurement is a range, take the fast end.
+pan_speed       = 133
+tilt_speed      = 133
+
+# ---- how far one press may move -------------------------------------
+# A press is at most drive_steps drives, each at most max_drive seconds.
+# Raise drive_steps to reach a box in one press; lower it to creep.
+max_drive       = 0.35
+drive_steps     = 1
+# Shorter than this and a DC motor is all acceleration, so it is skipped.
+min_move        = 0.15
+# Pause after each drive, to let it stop before the next command.
+settle          = 0.08
+
+# ---- direction ------------------------------------------------------
+# true if the axis turns the wrong way
+invert_pan      = true
+invert_tilt     = false
+
+# ---- angle limits, degrees ------------------------------------------
+pan_limit       = 90
+tilt_limit      = 80
+# Above this tilt the shot is near vertical and pan stops mattering.
+near_vertical   = 75
+# Tip every shot this much further down, for a mount that is not level.
+tilt_down       = 0
+
+# ---- the rail stepper -----------------------------------------------
+# Measure with:  python3 run_plan.py --rail-sweep
+rail_steps_per_cm = 2000
+# Seconds per half pulse. start_delay is the first step - a stepper
+# cannot begin at full rate, and if it buzzes without moving this is
+# the number to raise.
+rail_step_delay   = 0.00040
+rail_start_delay  = 0.0025
+rail_ramp_steps   = 120
+rail_travel_cm    = 35
+# true if DIR high moves away from the home stop
+rail_dir_forward  = true
+
+# ---- the valve ------------------------------------------------------
+# Seconds of pulse to flip the latch. Too short and it does not change
+# state while the code believes it did.
+valve_pulse     = 1.0
