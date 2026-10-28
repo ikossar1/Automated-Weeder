@@ -64,3 +64,7 @@ Thumbs.db
 desktop.ini
 .DS_Store
 _last_box.csv
+
+# Taught motions belong to the machine they were taught on, and are the
+# one thing here that cannot be regenerated. Never let a pull touch them.
+mobility/boxes.txt

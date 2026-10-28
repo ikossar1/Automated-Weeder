@@ -474,6 +474,26 @@ class Hardware:
         self.log.append(("valve", "open" if on else "shut"))
         return VALVE_PULSE_S
 
+    def jog(self, axis, seconds):
+        """
+        Drive an axis for a set time, and remember that it moved.
+
+        Everything that nudges an axis by duration goes through here.
+        The believed angle is the only record of where the machine is -
+        teaching and jogging used to move it without saying so, which
+        left "back to neutral" thinking it was already there and
+        "retrace" with nothing to retrace.
+        """
+        if abs(seconds) < MIN_MOVE_S:
+            return 0.0
+        way = 1 if seconds > 0 else -1
+        self.drive(axis, way)
+        wait(self, abs(seconds))
+        self.stop(axis)
+        wait(self, SETTLE_S)
+        self.angle[axis] += way * abs(seconds) * SPEED_DEG[axis]
+        return abs(seconds) + SETTLE_S
+
     def turn_to(self, axis, degrees, max_turn=None):
         """
         Drive a DC axis to an absolute angle, not by a relative nudge.

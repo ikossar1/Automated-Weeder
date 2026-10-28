@@ -1,3 +1,8 @@
+# TEMPLATE - copied to boxes.txt on first run, then left alone.
+#
+# Your own boxes.txt is not tracked by git, so pulling an update can
+# never overwrite what you have taught. Edit that one, not this.
+#
 # Taught motions. Several cases per box, and the map picks between them.
 #
 # Each line is one way of reaching one box. The last column says which

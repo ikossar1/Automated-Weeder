@@ -127,11 +127,21 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
 BOXES_FILE = HERE / "boxes.txt"
 
 
+EXAMPLE_FILE = HERE / "boxes.example.txt"
+
+
 def load_taught(path=BOXES_FILE):
     """Cases from boxes.txt, as {box: [case, case, ...]} in file order."""
     out = {}
     if not path.exists():
-        return out
+        # First run here. Start from the template rather than nothing,
+        # so there is something to edit and to read the columns off.
+        if EXAMPLE_FILE.exists():
+            path.write_text(EXAMPLE_FILE.read_text(encoding="utf-8"),
+                            encoding="utf-8")
+            print(f"  Started {path.name} from the template.")
+        else:
+            return out
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.split("#")[0].strip()
         if not line:
@@ -173,7 +183,7 @@ def choose_case(name, cases, occupied):
     return None, last
 
 
-def run_taught(hw, name, m, use_rail, cap=5.0):
+def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
     """
     Replay a taught motion, then undo it.
 
@@ -202,10 +212,11 @@ def run_taught(hw, name, m, use_rail, cap=5.0):
     drive("pan", m["pan_s"])
     drive("tilt", m["tilt_s"])
 
-    print(f"    spraying {m['spray_s']:.1f}s")
-    hw.valve(True)
-    RP.wait(hw, m["spray_s"])
-    hw.valve(False)
+    if spray:
+        print(f"    spraying {m['spray_s']:.1f}s")
+        hw.valve(True)
+        RP.wait(hw, m["spray_s"])
+        hw.valve(False)
 
     print("    back to the start")
     drive("tilt", -m["tilt_s"])
@@ -776,11 +787,7 @@ def main(argv=None):
                         jog_help()
                     elif key in JOG:
                         axis, way = JOG[key]
-                        hw.drive(axis, way)
-                        RP.wait(hw, STEPS[0])
-                        hw.stop(axis)
-                        RP.wait(hw, RP.SETTLE_S)
-                        hw.angle[axis] += way * STEPS[0] * RP.SPEED_DEG[axis]
+                        hw.jog(axis, way * STEPS[0])
                     elif key in RAIL_KEY and not args.no_rail:
                         hw.rail_to(hw.rail_cm + RAIL_KEY[key])
                     elif key:
@@ -859,11 +866,23 @@ def main(argv=None):
                 was = RP.MAX_DRIVE_STEPS
                 RP.MAX_DRIVE_STEPS = 40
                 try:
-                    for name, pan, tilt in reversed(history):
-                        print(f"    back to {name}  "
-                              f"pan {pan:+.0f}, tilt {tilt:.0f}")
-                        hw.turn_to("pan", pan)
-                        hw.turn_to("tilt", tilt)
+                    for name, case, pan, tilt in reversed(history):
+                        if case is not None:
+                            # Replay the taught motion itself, out and
+                            # back, rather than an angle - a taught case
+                            # is a pair of durations, and it is those
+                            # that have to be repeated to land in the
+                            # same place.
+                            print(f"    back through {name} "
+                                  f"('{case['case']}')")
+                            run_taught(hw, name, case,
+                                       use_rail=not args.no_rail,
+                                       spray=False)
+                        else:
+                            print(f"    back to {name}  "
+                                  f"pan {pan:+.0f}, tilt {tilt:.0f}")
+                            hw.turn_to("pan", pan)
+                            hw.turn_to("tilt", tilt)
                     print("    and back to neutral")
                     hw.turn_to("tilt", 0.0)
                     hw.turn_to("pan", 0.0)
@@ -932,7 +951,7 @@ def main(argv=None):
                          if case["crosses"] else ""))
                 run_taught(hw, cell["name"], case,
                            use_rail=not args.no_rail)
-                history.append((cell["name"], hw.angle["pan"],
+                history.append((cell["name"], case, hw.angle["pan"],
                                 hw.angle["tilt"]))
                 done.add(cell["name"])
                 continue
@@ -961,7 +980,7 @@ def main(argv=None):
             RP.run(hw, rows, rehome_every_box=True,
                    max_turn=args.max_turn, use_rail=False,
                    tilt_bias=args.tilt_down)
-            history.append((cell["name"], float(rows[-1]["pan_deg"]),
+            history.append((cell["name"], None, float(rows[-1]["pan_deg"]),
                             float(rows[-1]["tilt_deg"])))
             done.add(cell["name"])
             print(f"  {cell['name']} done.")
