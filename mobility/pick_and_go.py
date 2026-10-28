@@ -269,7 +269,9 @@ def delete_case(box, case, path=BOXES_FILE):
 
 JOG = {"LEFT": ("pan", -1), "RIGHT": ("pan", +1),
        "UP": ("tilt", +1), "DOWN": ("tilt", -1)}
-RAIL_KEY = {"s": +1.0, "j": -1.0}       # cm per press, right and left
+# Which way s and j move the rail. How FAR is rail_jog_cm in
+# settings.txt, read at run time so it can be changed without code.
+RAIL_KEY = {"s": +1, "j": -1}
 STEPS = (0.1, 0.4, 1.0)
 
 
@@ -776,7 +778,8 @@ def main(argv=None):
                     print("    JOGGING - one keypress, no Enter needed")
                     print("      arrows  left / right pan, up / down tilt")
                     if not args.no_rail:
-                        print("      s / j   rail right / left 1 cm")
+                        print(f"      s / j   rail right / left "
+                              f"{RP.RAIL_JOG_CM:.0f} cm")
                     print("      ?       show this again")
                     print("      x       back to the main menu")
                     print("    Nothing here is saved. Press z afterwards")
@@ -796,7 +799,8 @@ def main(argv=None):
                         axis, way = JOG[key]
                         hw.jog(axis, way * STEPS[0])
                     elif key in RAIL_KEY and not args.no_rail:
-                        hw.rail_to(hw.rail_cm + RAIL_KEY[key])
+                        hw.rail_to(hw.rail_cm
+                                   + RAIL_KEY[key] * RP.RAIL_JOG_CM)
                     elif key:
                         print("    arrows, s / j, or x")
                 continue

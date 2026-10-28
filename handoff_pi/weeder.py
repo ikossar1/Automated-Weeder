@@ -259,6 +259,7 @@ def load_settings(path=SETTINGS_FILE):
         "rail_start_delay": "RAIL_START_DELAY",
         "rail_ramp_steps": "RAIL_RAMP_STEPS",
         "rail_travel_cm": "RAIL_TRAVEL_CM",
+        "rail_jog_cm": "RAIL_JOG_CM",
         "valve_pulse": "VALVE_PULSE_S",
     }
     ints = {"MAX_DRIVE_STEPS", "RAIL_RAMP_STEPS", "PWM_HZ"}
@@ -307,6 +308,7 @@ def load_settings(path=SETTINGS_FILE):
 
 
 TILT_DOWN = 0.0
+RAIL_JOG_CM = 1.0
 _SETTINGS = load_settings()
 
 
