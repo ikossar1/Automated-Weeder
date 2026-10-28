@@ -235,10 +235,53 @@ def save_case(box, case, rail_mm, pan_s, tilt_s, spray_s, crosses,
     return "added"
 
 
-JOG = {"d": ("pan", +0.1), "a": ("pan", -0.1),
-       "w": ("tilt", +0.1), "s": ("tilt", -0.1),
-       "D": ("pan", +0.4), "A": ("pan", -0.4),
-       "W": ("tilt", +0.4), "S": ("tilt", -0.4)}
+ARROWS = {"[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT"}
+
+# Which way each key drives. The size of the step is set separately, so
+# the same four keys do fine work or coarse without changing meaning.
+JOG = {"LEFT": ("pan", -1), "RIGHT": ("pan", +1),
+       "UP": ("tilt", +1), "DOWN": ("tilt", -1)}
+RAIL_KEY = {"s": +1.0, "j": -1.0}       # cm per press, right and left
+STEPS = (0.1, 0.4, 1.0)
+
+
+def read_key(prompt="    > "):
+    """
+    One keypress, arrows included, without waiting for Enter.
+
+    The arrow keys send an escape sequence rather than a character, and
+    a normal input() never sees them - the shell's line editor takes
+    them first. So the terminal is put in raw mode for exactly as long
+    as it takes to read one key, and put back afterwards.
+
+    Falls back to reading a line where there is no terminal, so the
+    thing can still be driven from a script or a pipe.
+    """
+    print(prompt, end="", flush=True)
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return input().strip()
+    if not sys.stdin.isatty():
+        line = sys.stdin.readline()
+        if not line:
+            raise EOFError
+        return line.strip()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == chr(27):            # escape, so an arrow key follows
+            return ARROWS.get(sys.stdin.read(2), "ESC")
+        if ch == chr(3):             # ctrl-C in raw mode
+            raise KeyboardInterrupt
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        print()
 
 
 def teach(hw, cell, taught, use_rail, stops):
@@ -267,6 +310,7 @@ def teach(hw, cell, taught, use_rail, stops):
     rail_mm = hw.rail_cm * 10.0
     spray_s = 2.0
     fired = False
+    step = STEPS[0]
 
     def undo():
         for axis in ("tilt", "pan"):
@@ -281,35 +325,39 @@ def teach(hw, cell, taught, use_rail, stops):
         # ---- step 1: point it at the right place --------------------
         print("")
         print(f"  STEP 1 of 2 - AIM {box}.  The valve stays shut.")
-        print("    a / d   pan left / right 0.1s    (A / D for 0.4s)")
-        print("    s / w   tilt down / up 0.1s      (S / W for 0.4s)")
+        print("    arrows  left / right pan, up / down tilt")
         if use_rail:
-            print("    [ / ]   rail back / forward 10 mm")
+            print("    s / j   rail right / left 1 cm")
+        print("    f       change the step size")
         print("    0       undo it all      n  aim is right, go on")
         print("    c       cancel")
 
         while True:
             print(f"{NL_}    pan {totals['pan']:+.2f}s  "
-                  f"tilt {totals['tilt']:+.2f}s  rail {rail_mm:.0f}mm")
+                  f"tilt {totals['tilt']:+.2f}s  rail {rail_mm:.0f}mm"
+                  f"   step {step:.1f}s")
             try:
-                said = input("    aim > ").strip()
+                said = read_key("    aim > ")
             except EOFError:
                 return None
             if not said:
                 continue
             if said in JOG:
-                axis, secs = JOG[said]
-                hw.drive(axis, 1 if secs > 0 else -1)
-                RP.wait(hw, abs(secs))
+                axis, way = JOG[said]
+                secs = way * step
+                hw.drive(axis, way)
+                RP.wait(hw, step)
                 hw.stop(axis)
                 RP.wait(hw, RP.SETTLE_S)
                 totals[axis] += secs
-            elif said in ("[", "]"):
+            elif said in RAIL_KEY:
                 if not use_rail:
                     print("    rail is off")
                     continue
-                rail_mm += 10.0 if said == "]" else -10.0
+                rail_mm += RAIL_KEY[said] * 10.0
                 hw.rail_to(rail_mm / 10.0)
+            elif said == "f":
+                step = STEPS[(STEPS.index(step) + 1) % len(STEPS)]
             elif said == "0":
                 undo()
             elif said == "c":
@@ -325,7 +373,7 @@ def teach(hw, cell, taught, use_rail, stops):
         print(f"  STEP 2 of 2 - SPRAY.  Aim is locked at pan "
               f"{totals['pan']:+.2f}s, tilt {totals['tilt']:+.2f}s.")
         print("    t       spray for the time shown")
-        print("    + / -   change it by 0.2s     p 1.5  set it exactly")
+        print("    + / -   change it by 0.2s     p  type it exactly")
         print("    b       back to aiming        k  keep and save")
         print("    c       cancel")
 
@@ -334,7 +382,7 @@ def teach(hw, cell, taught, use_rail, stops):
             print(f"{NL_}    spray {spray_s:.1f}s"
                   + ("" if fired else "   (not fired yet)"))
             try:
-                said = input("    spray > ").strip()
+                said = read_key("    spray > ")
             except EOFError:
                 return None
             if not said:
@@ -346,11 +394,11 @@ def teach(hw, cell, taught, use_rail, stops):
                 fired = True
             elif said in ("+", "-"):
                 spray_s = max(0.1, spray_s + (0.2 if said == "+" else -0.2))
-            elif said.startswith("p"):
+            elif said == "p":
                 try:
-                    spray_s = max(0.1, float(said[1:].strip()))
+                    spray_s = max(0.1, float(input("    seconds: ").strip()))
                 except ValueError:
-                    print("    try: p 1.5")
+                    print("    that is not a number")
             elif said == "b":
                 back = True
                 break
@@ -661,30 +709,30 @@ def main(argv=None):
                 # something, or to free a jammed axis, belongs out here
                 # where nothing is being written down.
                 print("")
-                print("    a / d  pan    s / w  tilt   (capitals for 0.4s)")
+                print("    arrows  left / right pan, up / down tilt")
                 if not args.no_rail:
-                    print("    [ / ]  rail 10 mm")
-                print("    x      done")
+                    print("    s / j   rail right / left 1 cm")
+                print("    x       done")
                 print("    Nothing here is saved. Press z afterwards if")
                 print("    you have moved what you call neutral.")
                 while True:
                     try:
-                        key = input("    jog > ").strip()
+                        key = read_key("    jog > ")
                     except EOFError:
                         break
                     if key == "x":
                         break
                     if key in JOG:
-                        axis, secs = JOG[key]
-                        hw.drive(axis, 1 if secs > 0 else -1)
-                        RP.wait(hw, abs(secs))
+                        axis, way = JOG[key]
+                        hw.drive(axis, way)
+                        RP.wait(hw, STEPS[0])
                         hw.stop(axis)
                         RP.wait(hw, RP.SETTLE_S)
-                        hw.angle[axis] += secs * RP.SPEED_DEG[axis]
-                    elif key in ("[", "]") and not args.no_rail:
-                        hw.rail_to(hw.rail_cm + (1.0 if key == "]" else -1.0))
+                        hw.angle[axis] += way * STEPS[0] * RP.SPEED_DEG[axis]
+                    elif key in RAIL_KEY and not args.no_rail:
+                        hw.rail_to(hw.rail_cm + RAIL_KEY[key])
                     elif key:
-                        print("    a d s w, [ ], or x")
+                        print("    arrows, s / j, or x")
                 continue
 
             if said.startswith("t") and said[1:].strip().isdigit():
