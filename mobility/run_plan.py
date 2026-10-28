@@ -94,7 +94,7 @@ RAIL_STEPS_PER_CM = 2000.0
 # from standstill is well past what a small motor will pull in, and the
 # symptom is exactly what was seen - a motor that buzzes and does not
 # move. So every move starts slow and speeds up.
-RAIL_STEP_DELAY = 0.00008        # fastest, once up to speed
+RAIL_STEP_DELAY = 0.00040        # fastest, once up to speed
 RAIL_START_DELAY = 0.0025        # first step, slow enough to pull in
 RAIL_RAMP_STEPS = 120            # steps taken getting from one to the other
 
