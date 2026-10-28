@@ -116,6 +116,8 @@ def draw(cells, cols, rows, done, hw=None, stops=()):
     print("  all     spray every free box, in order")
     print("  t3      teach box 3 - jog it, test it, save it")
     print("  jog     move it about without teaching anything")
+    print("  cases   list what has been taught")
+    print("  del     remove a taught case")
     print("  n       back to neutral")
     print("  r       retrace backwards, valve shut")
     print("  z       call this position neutral")
@@ -240,6 +242,20 @@ ARROWS = {"[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT"}
 
 # Which way each key drives. The size of the step is set separately, so
 # the same four keys do fine work or coarse without changing meaning.
+def delete_case(box, case, path=BOXES_FILE):
+    """Drop one case from boxes.txt, leaving the comments alone."""
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        bare = line.split("#")[0].split()
+        if len(bare) >= 2 and bare[0].upper() == box and bare[1] == case:
+            del lines[i]
+            path.write_text(NL_.join(lines) + NL_, encoding="utf-8")
+            return True
+    return False
+
+
 JOG = {"LEFT": ("pan", -1), "RIGHT": ("pan", +1),
        "UP": ("tilt", +1), "DOWN": ("tilt", -1)}
 RAIL_KEY = {"s": +1.0, "j": -1.0}       # cm per press, right and left
@@ -310,14 +326,20 @@ def teach(hw, cell, taught, use_rail, stops):
     approved = None
     opened_at = None
 
-    print("")
-    print("    arrows  left / right pan, up / down tilt")
-    if use_rail:
-        print("    s / j   rail right / left 1 cm")
-    print("    f       step size")
-    print("    t       valve open, t again to shut it")
-    print("    + / -   nudge the saved spray time, p to type it")
-    print("    0       undo it all    k  keep it, c to cancel")
+    def help_():
+        print("")
+        print(f"    TEACHING {box} - one keypress, no Enter needed")
+        print("      arrows  left / right pan, up / down tilt")
+        if use_rail:
+            print("      s / j   rail right / left 1 cm")
+        print("      f       change the step size")
+        print("      t       valve OPEN, t again to SHUT")
+        print("      + / -   nudge the spray time, p to type it")
+        print("      0       undo the jogging, back to the start")
+        print("      ?       show this again")
+        print("      k       SAVE and leave      c  leave without saving")
+
+    help_()
 
     while True:
         mark = ""
@@ -328,13 +350,15 @@ def teach(hw, cell, taught, use_rail, stops):
               f"  rail {rail_mm:.0f}mm  step {step:.1f}s"
               f"  spray {spray_s:.1f}s{mark}")
         try:
-            said = read_key("    > ")
+            said = read_key(f"    teach {box} > ")
         except EOFError:
             return None
         if not said:
             continue
 
-        if said in JOG:
+        if said == "?":
+            help_()
+        elif said in JOG:
             axis, way = JOG[said]
             hw.drive(axis, way)
             RP.wait(hw, step)
@@ -691,27 +715,66 @@ def main(argv=None):
                 print("  Noted - this position is now neutral.")
                 continue
 
+            if said == "cases":
+                if not taught:
+                    print("  Nothing taught yet.")
+                    continue
+                print("")
+                for box in sorted(taught):
+                    free = box not in occupied
+                    print(f"    {box}{'' if free else '   [crop - skipped]'}")
+                    for c in taught[box]:
+                        print(f"       {c['case']:<12} rail {c['rail_mm']:>4.0f}mm"
+                              f"  pan {c['pan_s']:+.2f}s  tilt {c['tilt_s']:+.2f}s"
+                              f"  spray {c['spray_s']:.1f}s"
+                              f"  crosses {','.join(c['crosses']) or '-'}")
+                print("")
+                print("    Cases are tried top to bottom, so the first one")
+                print("    whose crossings are clear is the one that runs.")
+                continue
+
+            if said == "del":
+                box = input("  Which box (e.g. C1R1): ").strip().upper()
+                if box not in taught:
+                    print(f"  Nothing taught for {box}.")
+                    continue
+                print("    " + ", ".join(c["case"] for c in taught[box]))
+                case = input("  Which case: ").strip()
+                if delete_case(box, case):
+                    print(f"  Removed {box} '{case}'.")
+                    taught = load_taught()
+                else:
+                    print(f"  No case '{case}' for {box}.")
+                continue
+
             if said == "jog":
                 # Moving without recording. Inside teach every nudge has
                 # to count, or the saved numbers would not reproduce the
                 # position they describe - so repositioning to look at
                 # something, or to free a jammed axis, belongs out here
                 # where nothing is being written down.
-                print("")
-                print("    arrows  left / right pan, up / down tilt")
-                if not args.no_rail:
-                    print("    s / j   rail right / left 1 cm")
-                print("    x       done")
-                print("    Nothing here is saved. Press z afterwards if")
-                print("    you have moved what you call neutral.")
+                def jog_help():
+                    print("")
+                    print("    JOGGING - one keypress, no Enter needed")
+                    print("      arrows  left / right pan, up / down tilt")
+                    if not args.no_rail:
+                        print("      s / j   rail right / left 1 cm")
+                    print("      ?       show this again")
+                    print("      x       back to the main menu")
+                    print("    Nothing here is saved. Press z afterwards")
+                    print("    if you have moved what you call neutral.")
+
+                jog_help()
                 while True:
                     try:
                         key = read_key("    jog > ")
                     except EOFError:
                         break
-                    if key == "x":
+                    if key in ("x", "q"):
                         break
-                    if key in JOG:
+                    if key == "?":
+                        jog_help()
+                    elif key in JOG:
                         axis, way = JOG[key]
                         hw.drive(axis, way)
                         RP.wait(hw, STEPS[0])
