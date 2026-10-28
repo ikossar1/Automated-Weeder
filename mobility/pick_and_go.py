@@ -263,6 +263,12 @@ def teach(hw, cell, taught, use_rail, stops):
     rail_mm = hw.rail_cm * 10.0
     spray_s = 2.0
 
+    # What the spray was last fired from. Jogging after a test is how
+    # you look for something better, not how you change your mind about
+    # what worked - so the position saved is the one you actually sprayed
+    # from, not wherever the nudging happened to leave the head.
+    approved = None
+
     print("")
     print("    a / d   jog pan left / right by 0.1s   (A / D for 0.4s)")
     print("    s / w   jog tilt down / up by 0.1s     (S / W for 0.4s)")
@@ -273,8 +279,12 @@ def teach(hw, cell, taught, use_rail, stops):
     print("    k       keep it, c to cancel")
 
     while True:
+        mark = "" if approved is None else "   (sprayed: "
+        if approved is not None:
+            mark += (f"pan {approved['pan']:+.2f} tilt "
+                     f"{approved['tilt']:+.2f})")
         print(f"{NL_}    pan {totals['pan']:+.2f}s  tilt {totals['tilt']:+.2f}s"
-              f"  rail {rail_mm:.0f}mm  spray {spray_s:.1f}s")
+              f"  rail {rail_mm:.0f}mm  spray {spray_s:.1f}s{mark}")
         try:
             said = input("    > ").strip()
         except EOFError:
@@ -298,6 +308,9 @@ def teach(hw, cell, taught, use_rail, stops):
             hw.valve(True)
             RP.wait(hw, spray_s)
             hw.valve(False)
+            approved = {"pan": totals["pan"], "tilt": totals["tilt"],
+                        "rail_mm": rail_mm, "spray_s": spray_s}
+            print("    noted - this is the position k will save")
         elif said.startswith("p"):
             try:
                 spray_s = float(said[1:].strip())
@@ -315,12 +328,25 @@ def teach(hw, cell, taught, use_rail, stops):
             print("    cancelled, nothing saved")
             return None
         elif said == "k":
+            keep = approved
+            if keep is None:
+                print("    You have not sprayed from here yet. Press t to")
+                print("    test it first, or press k again to save anyway.")
+                if input("    > ").strip() != "k":
+                    continue
+                keep = {"pan": totals["pan"], "tilt": totals["tilt"],
+                        "rail_mm": rail_mm, "spray_s": spray_s}
+            elif (abs(keep["pan"] - totals["pan"]) > 1e-9
+                    or abs(keep["tilt"] - totals["tilt"]) > 1e-9):
+                print(f"    Saving the position you sprayed from "
+                      f"(pan {keep['pan']:+.2f}s, tilt {keep['tilt']:+.2f}s),")
+                print(f"    not where the jogging left it.")
             raw = input("    Boxes the spray crosses, comma separated "
                         "[-]: ").strip()
             crosses = [] if raw in ("", "-") else [
                 b.strip().upper() for b in raw.split(",")]
-            what = save_case(box, name, rail_mm, totals["pan"],
-                             totals["tilt"], spray_s, crosses)
+            what = save_case(box, name, keep["rail_mm"], keep["pan"],
+                             keep["tilt"], keep["spray_s"], crosses)
             print(f"    {what} {box} '{name}' in boxes.txt")
             return load_taught()
         else:
