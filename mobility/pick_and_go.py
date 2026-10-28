@@ -53,7 +53,12 @@ def newest_map():
 # named a b c. The boxes are aimed at; the rail positions are driven
 # to. Both are taught the same way and both live in boxes.txt, which
 # is why they share a screen.
-BOX_SLOTS = [0, 1, 2, 3]
+# Cells come out of the grid in reading order - C1R1, C2R1, C1R2,
+# C2R2 - and these are the numbers shown for them. Swapped left to
+# right in each row, so the numbering matches the machine rather than
+# the map's own ordering. Trainings are stored against the box NAMES,
+# so they stay with their physical box and are not disturbed by this.
+BOX_SLOTS = [1, 0, 3, 2]
 RAIL_STOPS = ["a", "b", "c"]
 RAIL_NAME = {k: f"RAIL_{k.upper()}" for k in RAIL_STOPS}
 
