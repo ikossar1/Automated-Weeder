@@ -81,6 +81,19 @@ def rail_stops(taught, step_mm):
 CASE_KEYS = "abcdefgh"
 
 
+def describe(case, index):
+    """
+    What a case does, from how it was named.
+
+    A case ending _a comes in at an angle, taught to get round whatever
+    is in front of the box. Anything else goes straight at it. The
+    naming carries that, so the list can say which is which without
+    needing another column in the file.
+    """
+    kind = "diagonal" if case["case"].endswith("_a") else "straight"
+    return f"{kind} shot, box {index}"
+
+
 def case_options(cells, taught, stops):
     """
     Every runnable thing, keyed by what you type to run it.
@@ -146,9 +159,10 @@ def draw(cells, cols, rows, done, hw=None, stops=(), taught=None):
                                  if c["count"]})
         for n, case in enumerate(cases):
             key = f"{cell['index']}{CASE_KEYS[n]}"
-            auto = "  <- what {} runs".format(cell["index"]) if case is picked else ""
-            print(f"     {key:<10} box {cell['index']} ({cell['name']}) "
-                  f"'{case['case']}'{auto}")
+            auto = ("  <- what {} runs".format(cell["index"])
+                    if case is picked else "")
+            print(f"     {key:<10} {describe(case, cell['index'])}"
+                  f"   ({case['case']}){auto}")
 
     for key, cm, is_taught in stops:
         how = "" if is_taught else "  (default, tb to teach)".replace("tb", "t" + key)
@@ -238,6 +252,7 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
         RP.wait(hw, RP.SETTLE_S)
 
     hw.valve(False)
+    rail_before = hw.rail_cm
     if use_rail:
         hw.rail_to(m["rail_mm"] / 10.0)
 
@@ -251,9 +266,15 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
         RP.wait(hw, m["spray_s"])
         hw.valve(False)
 
+    # Back to where this began, valve shut, every axis - including the
+    # rail. Nothing measures where pan and tilt point, so the next run
+    # can only start from a known place if this one puts it back.
     print("    back to the start")
+    hw.valve(False)
     drive("tilt", -m["tilt_s"])
     drive("pan", -m["pan_s"])
+    if use_rail and abs(hw.rail_cm - rail_before) > 0.05:
+        hw.rail_to(rail_before)
 
 
 
