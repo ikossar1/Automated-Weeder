@@ -76,3 +76,9 @@ rail_dir_forward  = true
 # Seconds of pulse to flip the latch. Too short and it does not change
 # state while the code believes it did.
 valve_pulse     = 1.0
+
+# ---- taught presets -------------------------------------------------
+# Longest a single taught drive may run. This is a guard against a
+# typo in boxes.txt, not a limit on what you can teach - raise it if
+# a long move of yours is being refused.
+preset_max      = 15

@@ -236,33 +236,35 @@ def choose_case(name, cases, occupied):
 
 
 
-def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
+def run_taught(hw, name, m, use_rail, cap=None, spray=True):
     """
-    Replay a taught motion, then undo it.
+    Replay a taught box: pan, tilt, spray. Nothing else.
 
-    Undoing matters more than it looks. Nothing measures where pan and
-    tilt are, so the only way the next box can start from a known place
-    is to put this one back where it began - same durations, opposite
-    directions. Drift still creeps in, which is what z is for.
+    The rail is deliberately not touched, whatever the case happens to
+    hold for it. Teaching used to record wherever the rail was standing
+    even when it had not been part of the lesson, so old cases carry
+    positions nobody chose - and reading them would move the rail on a
+    preset that was only ever meant to aim. Boxes are pan and tilt; the
+    rail is a, b and c. That is a rule here rather than something every
+    saved file has to be corrected for.
+
+    It also does not return to the start. A run leaves the head where
+    it aimed, and n goes back to neutral when you want it to.
     """
+    # A ceiling on a single taught drive, to catch a typo in the file -
+    # not to second-guess what was taught. It was 5 s, which is under
+    # several honestly taught moves, so those were being skipped in
+    # silence and the box only half aimed.
+    cap = RP.PRESET_MAX_S if cap is None else cap
+
     def drive(axis, secs):
-        if abs(secs) < RP.MIN_MOVE_S:
-            return
         if abs(secs) > cap:
             print(f"    {axis} {abs(secs):.1f}s is over the {cap:.0f}s "
                   f"limit - check boxes.txt")
             return
-        hw.drive(axis, 1 if secs > 0 else -1)
-        RP.wait(hw, abs(secs))
-        hw.stop(axis)
-        RP.wait(hw, RP.SETTLE_S)
+        hw.jog(axis, secs)
 
     hw.valve(False)
-    rail_before = hw.rail_cm
-    moves_rail = use_rail and m["rail_mm"] is not None
-    if moves_rail:
-        hw.rail_to(m["rail_mm"] / 10.0)
-
     print(f"    pan {m['pan_s']:+.2f}s, tilt {m['tilt_s']:+.2f}s")
     drive("pan", m["pan_s"])
     drive("tilt", m["tilt_s"])
@@ -272,17 +274,6 @@ def run_taught(hw, name, m, use_rail, cap=5.0, spray=True):
         hw.valve(True)
         RP.wait(hw, m["spray_s"])
         hw.valve(False)
-
-    # Back to where this began, valve shut, every axis - including the
-    # rail. Nothing measures where pan and tilt point, so the next run
-    # can only start from a known place if this one puts it back.
-    print("    back to the start")
-    hw.valve(False)
-    drive("tilt", -m["tilt_s"])
-    drive("pan", -m["pan_s"])
-    if moves_rail and abs(hw.rail_cm - rail_before) > 0.05:
-        hw.rail_to(rail_before)
-
 
 
 def save_case(box, case, rail_mm, pan_s, tilt_s, spray_s, crosses,
